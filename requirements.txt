@@ -1,8 +1,9 @@
 aiogram>=3.0
 sqlalchemy>=2.0
-asyncpg
 aiohttp
+aiosqlite
 openai
 matplotlib
 python-dotenv
 Pillow
+openpyxl

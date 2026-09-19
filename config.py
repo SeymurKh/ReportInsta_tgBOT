@@ -10,7 +10,8 @@ class Settings:
 
     # OpenAI
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_MODEL: str = "gpt-4.1"
+    OPENAI_MODEL_REPORT: str = "gpt-4.1"       # For report generation
+    OPENAI_MODEL_CHAT: str = "gpt-4.1-mini"    # For dialogue questions
 
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data/instagram_bot.db")

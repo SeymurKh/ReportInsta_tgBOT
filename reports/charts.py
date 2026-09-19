@@ -4,6 +4,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from config import settings
 
+plt.style.use(settings.CHART_STYLE)
 plt.rcParams.update({
     "figure.figsize": settings.CHART_SIZE,
     "axes.grid": True,
@@ -21,10 +22,11 @@ def _to_bytes(fig) -> bytes:
 
 def create_followers_chart(dates: list, followers: list) -> bytes:
     fig, ax = plt.subplots()
-    ax.plot(dates, followers, color=settings.CHART_COLORS[0], marker="o", linewidth=2)
-    ax.fill_between(dates, followers, alpha=0.1, color=settings.CHART_COLORS[0])
-    ax.set_title("Динамика подписчиков", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Подписчики")
+    colors = ["#4CAF50" if v >= 0 else "#F44336" for v in followers]
+    ax.bar(dates, followers, color=colors, alpha=0.8)
+    ax.axhline(y=0, color="gray", linestyle="-", alpha=0.3)
+    ax.set_title("Прирост подписчиков по дням", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Прирост")
     fig.autofmt_xdate()
     return _to_bytes(fig)
 

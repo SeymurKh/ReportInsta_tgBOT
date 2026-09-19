@@ -19,8 +19,8 @@ class Account(Base):
     name = Column(String(256), default="")
     access_token = Column(String(512), nullable=False)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.utcnow())
+    updated_at = Column(DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())
 
     daily_stats = relationship("DailyStats", back_populates="account", cascade="all, delete-orphan")
     posts = relationship("Post", back_populates="account", cascade="all, delete-orphan")

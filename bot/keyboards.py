@@ -53,3 +53,31 @@ def comparison_period_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="◀️ Назад", callback_data="back")],
         ]
     )
+
+
+def ai_period_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📅 Неделя", callback_data="ai_period_week")],
+            [InlineKeyboardButton(text="📅 Месяц", callback_data="ai_period_month")],
+            [InlineKeyboardButton(text="📅 Произвольный", callback_data="ai_period_custom")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")],
+        ]
+    )
+
+
+def question_after_report_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Вопрос по отчёту", callback_data="question_about_report")],
+        ]
+    )
+
+
+def dialogue_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📄 Скачать Excel"), KeyboardButton(text="◀️ В меню")],
+        ],
+        resize_keyboard=True,
+    )

@@ -8,7 +8,8 @@ logger = logging.getLogger(__name__)
 class AIAnalyzer:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        self.model = settings.OPENAI_MODEL
+        self.model_report = settings.OPENAI_MODEL_REPORT
+        self.model_chat = settings.OPENAI_MODEL_CHAT
 
     async def analyze_account(
         self, period: str, stats_summary: dict, content_summary: dict,
@@ -65,23 +66,37 @@ class AIAnalyzer:
 
         return await self._call_openai(prompt, max_tokens=600)
 
-    async def chat_with_context(self, context: str, user_question: str) -> str:
-        """Answer user questions about account data."""
-        prompt = f"""Ты — SMM-аналитик. Ответь на вопрос пользователя на основе данных аккаунта.
+    async def chat_with_context(self, context: str, history: list, question: str) -> str:
+        """Answer user questions about account data with conversation history."""
+        messages = [
+            {"role": "system", "content": "Ты — профессиональный SMM-аналитик. Отвечай на русском языке, кратко и по делу, ссылаясь на конкретные цифры из данных."},
+            {"role": "user", "content": f"ДАННЫЕ ОТЧЁТА:\n{context}"},
+            {"role": "assistant", "content": "Понял, данные принял. Готов отвечать на вопросы по этим данным."},
+        ]
+        # Add conversation history
+        for msg in history:
+            messages.append(msg)
+        # Add new question
+        messages.append({"role": "user", "content": question})
 
-ДАННЫЕ АККАУНТА:
-{context}
-
-ВОПРОС: {user_question}
-
-Ответь кратко и по делу, ссылаясь на конкретные цифры из данных. Если данных недостаточно — скажи об этом."""
-
-        return await self._call_openai(prompt, max_tokens=400)
-
-    async def _call_openai(self, prompt: str, max_tokens: int = 1000) -> str:
         try:
             response = await self.client.chat.completions.create(
-                model=self.model,
+                model=self.model_chat,
+                messages=messages,
+                max_tokens=400,
+                temperature=0.3,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"OpenAI chat error: {e}")
+            return "⚠️ Ошибка при обращении к AI. Попробуйте позже."
+
+    async def _call_openai(self, prompt: str, max_tokens: int = 1000, model: str = None) -> str:
+        if model is None:
+            model = self.model_report
+        try:
+            response = await self.client.chat.completions.create(
+                model=model,
                 messages=[
                     {"role": "system", "content": "Ты — профессиональный SMM-аналитик. Отвечай на русском языке."},
                     {"role": "user", "content": prompt},
