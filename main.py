@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -35,6 +36,11 @@ async def main():
     await init_db()
     logger.info("Database initialized")
 
+    # Reset database if --reset flag is passed
+    if "--reset" in sys.argv:
+        await crud.clear_all_data()
+        logger.info("Database cleared (--reset)")
+
     await seed_accounts()
 
     bot = Bot(
@@ -48,6 +54,8 @@ async def main():
     try:
         await dp.start_polling(bot)
     finally:
+        from instagram.client import close_shared_session
+        await close_shared_session()
         await bot.session.close()
         logger.info("Bot stopped.")
 

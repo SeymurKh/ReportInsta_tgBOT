@@ -18,39 +18,97 @@ logger = logging.getLogger(__name__)
 ai = AIAnalyzer()
 
 
-async def _ensure_data(account, since_dt: datetime, until_dt: datetime, since_unix: int, until_unix: int):
-    """Ensure we have data in DB. Fetch from API if needed."""
-    latest = await crud.get_latest_stats(account.id)
-    today = date.today()
+async def _fix_followers_field(account_id: int, date_from: date, date_to: date, current_followers: int):
+    """Recalculate followers field for each day by working backwards from the known current total."""
+    stats_list = await crud.get_daily_stats(account_id, date_from, date_to)
+    if not stats_list or not current_followers:
+        return
 
-    needs_fetch = latest is None or latest.date < today
+    stats_list.sort(key=lambda s: s.date)
 
-    if needs_fetch:
-        client = InstagramClient(account.instagram_user_id, account.access_token)
-        try:
-            snapshot = await client.collect_full_snapshot(since_unix, until_unix)
-            user_info = snapshot["user_info"]
+    for i in range(len(stats_list) - 1, -1, -1):
+        if i == len(stats_list) - 1:
+            followers_val = current_followers
+        else:
+            followers_val = stats_list[i + 1].followers - stats_list[i + 1].follower_count
+        await crud.update_followers_field(account_id, stats_list[i].date, followers_val)
 
-            for day_str, metrics in snapshot["insights"].items():
-                day_date = date.fromisoformat(day_str)
-                await crud.save_daily_stats(
-                    account_id=account.id,
-                    stats_date=day_date,
-                    followers=metrics.get("followers_count", user_info.get("followers_count", 0)),
-                    following=user_info.get("follows_count", 0),
-                    media_count=user_info.get("media_count", 0),
-                    reach=metrics.get("reach", 0),
-                    follower_count=metrics.get("follower_count", 0),
-                    views=metrics.get("views", 0),
-                    accounts_engaged=metrics.get("accounts_engaged", 0),
-                )
 
-            posts_data = await client.collect_posts_with_insights(since_dt, until_dt)
-            for p in posts_data:
-                p["account_id"] = account.id
-            await crud.save_posts(posts_data)
-        finally:
-            await client.close()
+async def _fetch_and_save_data(account, since_dt: datetime, until_dt: datetime) -> list[str]:
+    """Always fetch fresh data from Instagram API and save to DB.
+    Returns list of dates (dd.mm) with missing data due to Instagram API delay.
+    """
+    logger.info(f"Fetching fresh data for @{account.username} ({since_dt.date()} — {until_dt.date()})")
+
+    since_unix = int(since_dt.timestamp())
+    until_unix = int(until_dt.timestamp())
+
+    client = InstagramClient(account.instagram_user_id, account.access_token)
+    user_info = {}
+    try:
+        # 1. Fetch daily insights
+        snapshot = await client.collect_full_snapshot(since_unix, until_unix)
+        user_info = snapshot["user_info"]
+
+        for day_str, metrics in snapshot["insights"].items():
+            day_date = date.fromisoformat(day_str)
+            await crud.save_daily_stats(
+                account_id=account.id,
+                stats_date=day_date,
+                followers=0,  # recalculated below
+                following=user_info.get("follows_count", 0),
+                media_count=user_info.get("media_count", 0),
+                reach=metrics.get("reach", 0),
+                follower_count=metrics.get("follower_count", 0),
+                views=metrics.get("views", 0),
+                accounts_engaged=metrics.get("accounts_engaged", 0),
+            )
+
+        # 2. Fetch posts with insights
+        posts_data = await client.collect_posts_with_insights(since_dt, until_dt)
+        for p in posts_data:
+            p["account_id"] = account.id
+        await crud.save_posts(posts_data)
+
+        # 3. Clean up posts that were deleted from Instagram
+        fetched_ids = {p["instagram_media_id"] for p in posts_data}
+        await crud.delete_stale_posts(account.id, since_dt, until_dt, fetched_ids)
+
+    finally:
+        await client.close()
+
+    # 4. Fix followers field (calculate backwards from current total)
+    current_followers = user_info.get("followers_count", 0)
+    await _fix_followers_field(account.id, since_dt.date(), until_dt.date(), current_followers)
+
+    # 5. Check for missing days (Instagram API delay ~24-48h)
+    expected_days = (until_dt.date() - since_dt.date()).days + 1
+    all_dates = [since_dt.date() + timedelta(days=i) for i in range(expected_days)]
+    saved_stats = await crud.get_daily_stats(account.id, since_dt.date(), until_dt.date())
+    saved_dates = {s.date for s in saved_stats}
+    missing = [d for d in all_dates if d not in saved_dates]
+
+    if not missing:
+        return []
+
+    # Classify: within 48h = API delay (expected), outside = bug
+    now = datetime.now(timezone.utc)
+    api_delay_dates = []
+    bug_dates = []
+    for d in missing:
+        day_end = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=timezone.utc)
+        hours_since = (now - day_end).total_seconds() / 3600
+        if hours_since <= 48:
+            api_delay_dates.append(d)
+        else:
+            bug_dates.append(d)
+
+    if bug_dates:
+        logger.error(f"BUG: Data missing outside API delay window: {bug_dates}")
+    if api_delay_dates:
+        logger.info(f"Data missing due to Instagram API delay (< 48h): {api_delay_dates}")
+
+    return [d.strftime("%d.%m") for d in api_delay_dates]
 
 
 async def generate_report(
@@ -69,10 +127,8 @@ async def generate_report(
 
     since_dt = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
     until_dt = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
-    since_unix = int(since_dt.timestamp())
-    until_unix = int(until_dt.timestamp())
 
-    await _ensure_data(account, since_dt, until_dt, since_unix, until_unix)
+    api_delay_dates = await _fetch_and_save_data(account, since_dt, until_dt)
 
     stats_list = await crud.get_daily_stats(account.id, date_from, date_to)
     posts_list = await crud.get_posts(account.id, since_dt, until_dt)
@@ -136,6 +192,7 @@ async def generate_report(
 👥 Подписчики
 Текущие: {format_number(stats_summary['followers_end'])}
 Прирост: {format_growth(stats_summary['followers_growth'])} ({format_pct(stats_summary['followers_growth_pct'])})
+_Подписки − отписки (нет отдельной метрики отписок в Instagram API)_
 Тренд: {trend_map.get(trend, trend)}
 
 📈 Активность
@@ -145,7 +202,7 @@ async def generate_report(
 Средний охват/день: {format_number(stats_summary['reach_avg_daily'])}
 
 📹 Контент ({content_summary['total_posts']} публикаций)
-Reels: {content_summary['total_reels']} | Фото: {content_summary['total_images']} | Карусели: {content_summary['total_carousels']}
+Reels: {content_summary['total_reels']} | Видео: {content_summary['total_videos']} | Фото: {content_summary['total_images']} | Карусели: {content_summary['total_carousels']}
 Средние лайки: {content_summary['avg_likes']} | Средний охват: {content_summary['avg_reach']}
 Вовлечённость (ER): {content_summary['engagement_rate']}%
 
@@ -157,6 +214,11 @@ Reels: {content_summary['total_reels']} | Фото: {content_summary['total_imag
 
 🤖 AI-анализ
 {ai_analysis}"""
+
+    # Add API delay warning if needed
+    if api_delay_dates:
+        dates_str = ", ".join(api_delay_dates)
+        report_text += f"\n\n⚠️ Данные за {dates_str} могут быть неполными (задержка Instagram API ~24-48ч)"
 
     charts = {}
     if stats_list:
@@ -223,8 +285,9 @@ async def generate_comparison_periods_report(
     p2_since_dt = datetime(period2_from.year, period2_from.month, period2_from.day, tzinfo=timezone.utc)
     p2_until_dt = datetime(period2_to.year, period2_to.month, period2_to.day, 23, 59, 59, tzinfo=timezone.utc)
 
-    await _ensure_data(account, p1_since_dt, p1_until_dt, int(p1_since_dt.timestamp()), int(p1_until_dt.timestamp()))
-    await _ensure_data(account, p2_since_dt, p2_until_dt, int(p2_since_dt.timestamp()), int(p2_until_dt.timestamp()))
+    p1_delay = await _fetch_and_save_data(account, p1_since_dt, p1_until_dt)
+    p2_delay = await _fetch_and_save_data(account, p2_since_dt, p2_until_dt)
+    api_delay_dates = list(set(p1_delay + p2_delay))
 
     # Get data
     p1_stats = await crud.get_daily_stats(account.id, period1_from, period1_to)
@@ -281,6 +344,10 @@ async def generate_comparison_periods_report(
     ai_analysis = await ai.analyze_comparison(comparison_data)
 
     lines.append(f"\n🤖 AI-сравнение\n{ai_analysis}")
+
+    if api_delay_dates:
+        dates_str = ", ".join(api_delay_dates)
+        lines.append(f"\n⚠️ Данные за {dates_str} могут быть неполными (задержка Instagram API ~24-48ч)")
 
     context = {
         "account": f"@{account.username} — {account.name}",

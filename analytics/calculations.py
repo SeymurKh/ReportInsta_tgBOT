@@ -25,7 +25,7 @@ def calculate_period_summary(stats_list: list) -> dict:
     # Growth = sum of daily follower_count changes from insights
     growth = sum(s.follower_count for s in stats_list)
     followers_start = followers_end - growth
-    growth_pct = round(growth / followers_start * 100, 1) if followers_start > 0 else 0.0
+    growth_pct = round(growth / followers_start * 100, 1) if followers_start != 0 else 0.0
 
     reach_total = sum(s.reach for s in stats_list)
     views_total = sum(s.views for s in stats_list)
@@ -49,16 +49,17 @@ def calculate_period_summary(stats_list: list) -> dict:
 def calculate_content_summary(posts_list: list) -> dict:
     if not posts_list:
         return {
-            "total_posts": 0, "total_reels": 0, "total_carousels": 0, "total_images": 0,
+            "total_posts": 0, "total_reels": 0, "total_videos": 0, "total_carousels": 0, "total_images": 0,
             "total_likes": 0, "total_comments": 0, "total_saves": 0, "total_shares": 0,
             "avg_likes": 0, "avg_comments": 0, "avg_reach": 0,
             "engagement_rate": 0.0,
         }
 
     total = len(posts_list)
-    reels = sum(1 for p in posts_list if p.media_type == "VIDEO" or p.media_type == "REELS")
+    reels = sum(1 for p in posts_list if p.media_type == "REELS")
+    videos = sum(1 for p in posts_list if p.media_type == "VIDEO")
     carousels = sum(1 for p in posts_list if p.media_type == "CAROUSEL_ALBUM")
-    images = total - reels - carousels
+    images = total - reels - videos - carousels
 
     total_likes = sum(p.likes for p in posts_list)
     total_comments = sum(p.comments for p in posts_list)
@@ -72,6 +73,7 @@ def calculate_content_summary(posts_list: list) -> dict:
     return {
         "total_posts": total,
         "total_reels": reels,
+        "total_videos": videos,
         "total_carousels": carousels,
         "total_images": images,
         "total_likes": total_likes,

@@ -16,8 +16,32 @@ MEDIA_METRICS_MAP: dict[str, list[str]] = {
     "REELS": ["reach", "likes", "comments", "saved", "shares", "total_interactions", "views"],
 }
 
+
+def _resolve_media_type(raw_type: str, product_type: str) -> str:
+    """Determine actual media type using media_product_type from Instagram API."""
+    if raw_type == "VIDEO" and product_type == "REELS":
+        return "REELS"
+    return raw_type  # IMAGE, VIDEO, CAROUSEL_ALBUM
+
 ACCOUNT_METRICS_OLD = ["reach", "follower_count"]
 ACCOUNT_METRICS_NEW = ["views", "accounts_engaged"]
+
+
+_shared_session: aiohttp.ClientSession | None = None
+
+
+async def _get_shared_session() -> aiohttp.ClientSession:
+    global _shared_session
+    if _shared_session is None or _shared_session.closed:
+        _shared_session = aiohttp.ClientSession()
+    return _shared_session
+
+
+async def close_shared_session():
+    global _shared_session
+    if _shared_session and not _shared_session.closed:
+        await _shared_session.close()
+        _shared_session = None
 
 
 class InstagramClient:
@@ -25,12 +49,9 @@ class InstagramClient:
         self.user_id = user_id
         self.access_token = access_token
         self.base_url = f"{settings.INSTAGRAM_BASE_URL}/{settings.INSTAGRAM_API_VERSION}"
-        self._session: Optional[aiohttp.ClientSession] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+        return await _get_shared_session()
 
     async def _request(self, url: str, params: Optional[dict] = None) -> dict:
         if params is None:
@@ -100,7 +121,7 @@ class InstagramClient:
     async def get_media_list(self, limit: int = 50) -> list[dict]:
         url = f"{self.base_url}/{self.user_id}/media"
         params = {
-            "fields": "id,caption,media_type,permalink,timestamp,like_count,comments_count",
+            "fields": "id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count",
             "limit": str(limit),
         }
         all_media = []
@@ -187,9 +208,26 @@ class InstagramClient:
     async def collect_posts_with_insights(
         self, date_from: datetime, date_to: datetime
     ) -> list[dict]:
-        media_list = await self.get_media_list(limit=100)
+        # Paginate through all media
+        all_media = []
+        url = f"{self.base_url}/{self.user_id}/media"
+        params = {
+            "fields": "id,media_type,media_product_type,caption,permalink,timestamp,like_count,comments_count",
+            "limit": "100",
+        }
+        while url:
+            params["access_token"] = self.access_token
+            session = await self._get_session()
+            async with session.get(url, params=params) as resp:
+                data = await resp.json()
+                if resp.status != 200:
+                    break
+                all_media.extend(data.get("data", []))
+                url = data.get("paging", {}).get("next")
+                params = {}  # next URL already contains params
+
         posts = []
-        for media in media_list:
+        for media in all_media:
             ts_str = media.get("timestamp", "")
             if not ts_str:
                 continue
@@ -197,7 +235,10 @@ class InstagramClient:
             if not (date_from <= ts <= date_to):
                 continue
 
-            media_type = media.get("media_type", "IMAGE")
+            media_type = _resolve_media_type(
+                media.get("media_type", "IMAGE"),
+                media.get("media_product_type", "")
+            )
             insights = {}
             try:
                 insights = await self.get_media_insights(media["id"], media_type)
@@ -221,8 +262,8 @@ class InstagramClient:
         return posts
 
     async def close(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """Deprecated: use close_shared_session() instead."""
+        pass
 
 
 class InstagramAPIError(Exception):

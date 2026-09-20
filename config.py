@@ -1,3 +1,4 @@
+import json
 import os
 from dotenv import load_dotenv
 
@@ -23,14 +24,14 @@ class Settings:
     INSTAGRAM_API_VERSION: str = "v25.0"
     INSTAGRAM_BASE_URL: str = "https://graph.instagram.com"
 
-    # Instagram Accounts
-    ACCOUNTS: list[dict] = [
-        {
-            "name": "biblioteka.baku",
-            "user_id": "17841420413366121",
-            "access_token": "IGAAhABiE4S8VBZAGE3TXUzcTFNcEZAXSjBFLVBteU9BVUtBbjZAyc2lZANEZA0Q1RDT2tZAVnFuNnljWkZAXanFxV29lbWVSU2UteHZASWllhWXhWUmdxNjAzUHNsX1R4NEhtT1pYdUtZAODJJQjUtcTVOaFc0bE1BSTlIOFJLeEFraUtqRQZDZD",
-        },
-    ]
+    # Instagram Accounts (loaded from .env INSTAGRAM_ACCOUNTS as JSON)
+    ACCOUNTS: list[dict] = []
+    try:
+        _raw_accounts = os.getenv("INSTAGRAM_ACCOUNTS", "[]")
+        ACCOUNTS = json.loads(_raw_accounts)
+    except json.JSONDecodeError as e:
+        import sys
+        print(f"[config] ERROR: INSTAGRAM_ACCOUNTS contains invalid JSON: {e}", file=sys.stderr)
 
     # Chart settings
     CHART_STYLE: str = "seaborn-v0_8-whitegrid"

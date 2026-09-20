@@ -42,7 +42,7 @@ def _get_state(user_id: int) -> dict:
 
 # ── Admin check ──
 
-async def _check_admin(user_id: int) -> bool:
+def _check_admin(user_id: int) -> bool:
     return user_id == settings.ADMIN_TELEGRAM_ID
 
 
@@ -50,7 +50,7 @@ async def _check_admin(user_id: int) -> bool:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         await message.answer("⛔ Доступ запрещён.")
         return
     await message.answer(
@@ -64,7 +64,7 @@ async def cmd_start(message: Message):
 
 @router.message(F.text == "📊 Отчёты")
 async def reports_handler(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         return
     state = _get_state(message.from_user.id)
     state["dialogue_active"] = False
@@ -82,7 +82,7 @@ async def reports_handler(message: Message):
 
 @router.callback_query(F.data.startswith("account_"))
 async def account_callback(callback: CallbackQuery):
-    if not await _check_admin(callback.from_user.id):
+    if not _check_admin(callback.from_user.id):
         return
     state = _get_state(callback.from_user.id)
     state["selected_account"] = int(callback.data.split("_")[1])
@@ -98,7 +98,7 @@ async def account_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("period_"))
 async def period_callback(callback: CallbackQuery):
-    if not await _check_admin(callback.from_user.id):
+    if not _check_admin(callback.from_user.id):
         return
     period = callback.data.split("_")[1]
     state = _get_state(callback.from_user.id)
@@ -185,7 +185,7 @@ async def period_callback(callback: CallbackQuery):
 
 @router.message(F.text.regexp(r"^\d{2}\.\d{2}(-\d{2}\.\d{2})?$"))
 async def custom_dates_handler(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         return
 
     state = _get_state(message.from_user.id)
@@ -227,6 +227,11 @@ async def custom_dates_handler(message: Message):
                 raise ValueError("Invalid date")
             date_from = date(today.year, month1, day1)
             date_to = date(today.year, month2, day2)
+
+        if date_from > date_to:
+            await message.answer("❌ Дата начала не может быть позже даты конца.")
+            return
+
     except (ValueError, IndexError):
         await message.answer("❌ Неверный формат. Используйте: ДД.ММ или ДД.ММ-ДД.ММ\nНапример: 15.09 или 01.09-15.09")
         return
@@ -292,7 +297,7 @@ async def custom_dates_handler(message: Message):
 
 @router.message(F.text == "📱 Аккаунты")
 async def accounts_handler(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         return
     state = _get_state(message.from_user.id)
     state["dialogue_active"] = False
@@ -314,7 +319,7 @@ async def accounts_handler(message: Message):
 
 @router.callback_query(F.data == "back")
 async def back_callback(callback: CallbackQuery):
-    if not await _check_admin(callback.from_user.id):
+    if not _check_admin(callback.from_user.id):
         return
     try:
         await callback.message.delete()
@@ -328,7 +333,7 @@ async def back_callback(callback: CallbackQuery):
 
 @router.message(F.text == "📊 Сравнение")
 async def comparison_handler(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         return
     state = _get_state(message.from_user.id)
     state["dialogue_active"] = False
@@ -346,7 +351,7 @@ async def comparison_handler(message: Message):
 
 @router.callback_query(F.data.startswith("comp_"))
 async def comparison_period_callback(callback: CallbackQuery):
-    if not await _check_admin(callback.from_user.id):
+    if not _check_admin(callback.from_user.id):
         return
     state = _get_state(callback.from_user.id)
     account_id = state["selected_account"]
@@ -432,7 +437,7 @@ async def comparison_period_callback(callback: CallbackQuery):
 
 @router.message(F.text.regexp(r"^\d{2}\.\d{2}-\d{2}\.\d{2}\s+vs\s+\d{2}\.\d{2}-\d{2}\.\d{2}$"))
 async def custom_comparison_dates_handler(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         return
 
     state = _get_state(message.from_user.id)
@@ -473,6 +478,13 @@ async def custom_comparison_dates_handler(message: Message):
         p1_to = date(today.year, month2, day2)
         p2_from = date(today.year, month3, day3)
         p2_to = date(today.year, month4, day4)
+
+        if p1_from > p1_to:
+            await message.answer("❌ В первом периоде дата начала не может быть позже даты конца.")
+            return
+        if p2_from > p2_to:
+            await message.answer("❌ Во втором периоде дата начала не может быть позже даты конца.")
+            return
     except (ValueError, IndexError):
         await message.answer(
             "❌ Неверный формат. Используйте:\n"
@@ -517,19 +529,79 @@ async def custom_comparison_dates_handler(message: Message):
         await message.answer(f"❌ Ошибка: {e}", parse_mode=None)
 
 
+# ── 📄 Скачать Excel (inline button after report) ──
+
+@router.callback_query(F.data == "download_excel")
+async def download_excel_callback(callback: CallbackQuery):
+    if not _check_admin(callback.from_user.id):
+        return
+
+    state = _get_state(callback.from_user.id)
+    context = state["report_context"]
+    if not context:
+        await callback.answer("⚠️ Нет данных для отчёта.", show_alert=True)
+        return
+
+    await callback.answer()
+    loading_msg = await callback.message.answer("⏳ Формирую Excel...")
+
+    try:
+        from reports.excel_generator import generate_excel_report
+
+        stats = context.get("stats", {})
+        content = context.get("content", {})
+        daily = context.get("daily_stats", [])
+        publications = context.get("publications", [])
+
+        account_str = context.get("account", "")
+        account_username = account_str.split("@")[1].split(" —")[0] if "@" in account_str else "account"
+
+        excel_bytes = generate_excel_report(
+            account_username=account_username,
+            account_name=account_str,
+            period_str=context.get("period", ""),
+            stats_summary=stats,
+            content_summary=content,
+            daily_stats=daily,
+            publications=publications,
+            ai_analysis=context.get("ai_analysis", "Нет данных"),
+            dialogue_history=state["dialogue_history"],
+        )
+
+        try:
+            await loading_msg.delete()
+        except Exception:
+            pass
+
+        filename = f"report_{context.get('period', 'period').replace(' ', '_').replace('–', '-')}.xlsx"
+        await callback.message.answer_document(
+            BufferedInputFile(excel_bytes, filename=filename),
+            caption="📊 Отчёт в формате Excel",
+        )
+
+    except Exception as e:
+        logger.error(f"Excel callback error: {e}", exc_info=True)
+        try:
+            await loading_msg.delete()
+        except Exception:
+            pass
+        await callback.message.answer(f"❌ Ошибка: {e}", parse_mode=None)
+
+
 # ── 💬 Вопрос по отчёту (кнопка после отчёта) ──
 
 @router.callback_query(F.data == "question_about_report")
 async def question_about_report(callback: CallbackQuery):
-    if not await _check_admin(callback.from_user.id):
+    if not _check_admin(callback.from_user.id):
         return
 
     state = _get_state(callback.from_user.id)
-    state["dialogue_active"] = True
-    state["dialogue_history"] = []
 
     context = state["report_context"]
     period = context.get("period", "—") if context else "—"
+
+    state["dialogue_active"] = True
+    state["dialogue_history"] = []
 
     await callback.message.edit_text(
         f"💬 Задайте вопрос по данным за {period}.\n"
@@ -544,7 +616,7 @@ async def question_about_report(callback: CallbackQuery):
 
 @router.message(F.text == "💬 Вопрос нейронке")
 async def ai_chat_start(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         return
 
     state = _get_state(message.from_user.id)
@@ -576,7 +648,7 @@ async def ai_chat_start(message: Message):
 
 @router.callback_query(F.data.startswith("ai_period_"))
 async def ai_period_callback(callback: CallbackQuery):
-    if not await _check_admin(callback.from_user.id):
+    if not _check_admin(callback.from_user.id):
         return
 
     period = callback.data.split("_")[2]  # week/month/custom
@@ -676,11 +748,18 @@ async def ai_period_callback(callback: CallbackQuery):
     "◀️ В меню", "📄 Скачать Excel"
 }))
 async def ai_chat_handler(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         return
 
     state = _get_state(message.from_user.id)
     if not state["dialogue_active"]:
+        # Not in dialogue mode — check if this is a date input for custom periods
+        text = message.text.strip()
+        is_date_format = bool(re.match(r"^\d{2}\.\d{2}(-\d{2}\.\d{2})?$", text))
+        is_comparison_format = bool(re.match(r"^\d{2}\.\d{2}-\d{2}\.\d{2}\s+vs\s+\d{2}\.\d{2}-\d{2}\.\d{2}$", text))
+        if is_date_format or is_comparison_format:
+            return  # Let the dedicated handlers process it
+        await message.answer("Используйте меню для выбора действия.", reply_markup=main_menu_kb())
         return
 
     context = state["report_context"]
@@ -725,7 +804,7 @@ async def ai_chat_handler(message: Message):
 
 @router.message(F.text == "📄 Скачать Excel")
 async def download_excel_handler(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         return
 
     state = _get_state(message.from_user.id)
@@ -746,8 +825,14 @@ async def download_excel_handler(message: Message):
         daily = context.get("daily_stats", [])
         publications = context.get("publications", [])
 
+        account_str = context.get("account", "")
+        if "@" in account_str:
+            account_username = account_str.split("@")[1].split(" —")[0].split(" ")[0]
+        else:
+            account_username = "account"
+
         excel_bytes = generate_excel_report(
-            account_username=context.get("account", "").split("@")[1].split(" —")[0] if "@" in context.get("account", "") else "account",
+            account_username=account_username,
             account_name=context.get("account", ""),
             period_str=context.get("period", ""),
             stats_summary=stats,
@@ -782,7 +867,7 @@ async def download_excel_handler(message: Message):
 
 @router.message(F.text == "◀️ В меню")
 async def back_to_menu(message: Message):
-    if not await _check_admin(message.from_user.id):
+    if not _check_admin(message.from_user.id):
         return
 
     state = _get_state(message.from_user.id)

@@ -68,6 +68,7 @@ def format_context_for_ai(context: dict) -> str:
         lines.append(f"Охват: {stats.get('reach_total', 0)} | Просмотры: {stats.get('views_total', 0)}")
         lines.append(f"Вовлечено: {stats.get('accounts_engaged_total', 0)}")
         lines.append(f"Публикаций: {content.get('total_posts', 0)} (Reels: {content.get('total_reels', 0)}, "
+                     f"Видео: {content.get('total_videos', 0)}, "
                      f"Фото: {content.get('total_images', 0)}, Карусели: {content.get('total_carousels', 0)})")
         lines.append(f"Ср. лайки: {content.get('avg_likes', 0)} | Ср. охват: {content.get('avg_reach', 0)}")
         lines.append(f"ER: {content.get('engagement_rate', 0)}%")

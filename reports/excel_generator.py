@@ -47,6 +47,7 @@ def generate_excel_report(
         ("Контент", [
             ("Публикаций", content_summary.get("total_posts", 0)),
             ("Reels", content_summary.get("total_reels", 0)),
+            ("Видео", content_summary.get("total_videos", 0)),
             ("Фото", content_summary.get("total_images", 0)),
             ("Карусели", content_summary.get("total_carousels", 0)),
             ("Лайки", content_summary.get("total_likes", 0)),

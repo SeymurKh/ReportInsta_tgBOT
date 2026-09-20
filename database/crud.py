@@ -1,10 +1,13 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
+import logging
 
-from sqlalchemy import select, update, and_
+from sqlalchemy import select, update, and_, text
 
 from database.engine import async_session_factory
 from database.models import Account, DailyStats, Post
+
+logger = logging.getLogger(__name__)
 
 
 # ────────────────────── Accounts ──────────────────────
@@ -27,7 +30,7 @@ async def save_or_update_account(
             account.name = name
             account.access_token = access_token
             account.is_active = True
-            account.updated_at = datetime.utcnow()
+            account.updated_at = datetime.now(timezone.utc)
         else:
             account = Account(
                 instagram_user_id=instagram_user_id,
@@ -68,7 +71,7 @@ async def update_account_token(instagram_user_id: str, new_token: str) -> None:
         await session.execute(
             update(Account)
             .where(Account.instagram_user_id == instagram_user_id)
-            .values(access_token=new_token, updated_at=datetime.utcnow())
+            .values(access_token=new_token, updated_at=datetime.now(timezone.utc))
         )
         await session.commit()
 
@@ -111,6 +114,17 @@ async def save_daily_stats(
                 views=views, accounts_engaged=accounts_engaged,
             ))
 
+        await session.commit()
+
+
+async def update_followers_field(account_id: int, stats_date: date, followers: int) -> None:
+    """Update only the followers field for a specific day."""
+    async with async_session_factory() as session:
+        await session.execute(
+            update(DailyStats)
+            .where(DailyStats.account_id == account_id, DailyStats.date == stats_date)
+            .values(followers=followers)
+        )
         await session.commit()
 
 
@@ -157,6 +171,9 @@ async def save_posts(posts_data: list[dict]) -> None:
             row = existing.scalar_one_or_none()
 
             if row:
+                row.media_type = post["media_type"]
+                row.caption = post.get("caption", "")
+                row.permalink = post.get("permalink", "")
                 row.likes = post["likes"]
                 row.comments = post["comments"]
                 row.saved = post["saved"]
@@ -168,6 +185,31 @@ async def save_posts(posts_data: list[dict]) -> None:
                 session.add(Post(**post))
 
         await session.commit()
+
+
+async def delete_stale_posts(account_id: int, date_from: datetime, date_to: datetime, current_media_ids: set[str]) -> int:
+    """Delete posts from DB that are no longer returned by Instagram API (deleted posts).
+    Returns number of deleted posts."""
+    async with async_session_factory() as session:
+        existing = await session.execute(
+            select(Post).where(
+                and_(
+                    Post.account_id == account_id,
+                    Post.timestamp >= date_from,
+                    Post.timestamp <= date_to,
+                )
+            )
+        )
+        existing_posts = existing.scalars().all()
+        to_delete = [p for p in existing_posts if p.instagram_media_id not in current_media_ids]
+
+        if to_delete:
+            for p in to_delete:
+                await session.delete(p)
+            await session.commit()
+            logger.info(f"Deleted {len(to_delete)} stale posts for account {account_id}")
+
+        return len(to_delete)
 
 
 async def get_posts(
@@ -218,3 +260,12 @@ async def get_top_posts(
             .limit(limit)
         )
         return list(result.scalars().all())
+
+
+async def clear_all_data() -> None:
+    """Delete all data from all tables. Used for reset."""
+    async with async_session_factory() as session:
+        await session.execute(text("DELETE FROM posts"))
+        await session.execute(text("DELETE FROM daily_stats"))
+        await session.execute(text("DELETE FROM accounts"))
+        await session.commit()

@@ -21,7 +21,7 @@ class AIAnalyzer:
 Период: {period}
 Подписчики: {stats_summary.get('followers_end', 0)} (прирост: {stats_summary.get('followers_growth', 0)}, {stats_summary.get('followers_growth_pct', 0)}%)
 Охват: {stats_summary.get('reach_total', 0)} | Просмотры: {stats_summary.get('views_total', 'н/д')} | Вовлечено: {stats_summary.get('accounts_engaged_total', 'н/д')}
-Контент: {content_summary.get('total_posts', 0)} постов (Reels: {content_summary.get('total_reels', 0)}, Image: {content_summary.get('total_images', 0)}, Carousel: {content_summary.get('total_carousels', 0)})
+Контент: {content_summary.get('total_posts', 0)} постов (Reels: {content_summary.get('total_reels', 0)}, Видео: {content_summary.get('total_videos', 0)}, Image: {content_summary.get('total_images', 0)}, Carousel: {content_summary.get('total_carousels', 0)})
 Средние: лайки {content_summary.get('avg_likes', 0)}, охват {content_summary.get('avg_reach', 0)}, ER: {content_summary.get('engagement_rate', 0)}%
 Лучший пост: {best_post_info}
 Тренд: {trend}

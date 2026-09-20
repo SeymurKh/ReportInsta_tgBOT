@@ -69,6 +69,7 @@ def ai_period_kb() -> InlineKeyboardMarkup:
 def question_after_report_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="📄 Скачать Excel", callback_data="download_excel")],
             [InlineKeyboardButton(text="💬 Вопрос по отчёту", callback_data="question_about_report")],
         ]
     )
