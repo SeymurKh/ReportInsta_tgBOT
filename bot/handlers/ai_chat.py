@@ -11,7 +11,7 @@ from instagram.client import TokenExpiredError
 from reports.generator import generate_report
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from bot.states import AIForm
-from bot.keyboards import ai_period_kb, dialogue_kb, main_menu_kb
+from bot.keyboards import ai_calendar_kb, dialogue_kb, main_menu_kb
 from bot.helpers import send_report_result, send_excel, parse_period_input
 from utils.formatters import format_context_for_ai
 
@@ -41,9 +41,19 @@ async def ai_chat_start(message: Message, state: FSMContext):
     if context:
         await _enter_dialogue(message, state, context)
     else:
+        accounts = await crud.get_all_accounts()
+        if not accounts:
+            await message.answer("❌ Нет доступных аккаунтов.")
+            return
+        today = datetime.now(timezone.utc).date()
+        await state.update_data(
+            selected_account=accounts[0].id,
+            ai_calendar_stage=1,
+        )
+        await state.set_state(AIForm.waiting_custom_dates)
         await message.answer(
-            "📅 Сначала соберу данные. За какой период?",
-            reply_markup=ai_period_kb(),
+            "📅 Сначала соберу данные. Выберите начало периода:",
+            reply_markup=ai_calendar_kb(today.year, today.month, 1, today),
         )
 
 
@@ -112,8 +122,69 @@ async def ai_period_callback(callback: CallbackQuery, state: FSMContext):
     await _report_then_dialogue(callback.message, state, account, period=period)
 
 
+@router.callback_query(F.data.startswith("aical_"))
+async def ai_calendar_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    stage = data.get("ai_calendar_stage")
+    if stage is None:
+        await callback.answer("Календарь устарел. Начните заново.", show_alert=True)
+        return
+    parts = callback.data.split("_")
+    today = datetime.now(timezone.utc).date()
+    if parts[1] == "noop":
+        await callback.answer()
+        return
+    if parts[1] == "nav":
+        year, month, direction = int(parts[3]), int(parts[4]), int(parts[5])
+        month += direction
+        if month == 0:
+            year, month = year - 1, 12
+        elif month == 13:
+            year, month = year + 1, 1
+        await callback.message.edit_reply_markup(
+            reply_markup=ai_calendar_kb(year, month, stage, today)
+        )
+        await callback.answer()
+        return
+
+    selected = date(int(parts[3]), int(parts[4]), int(parts[5]))
+    if stage == 2 and selected < data["ai_from"]:
+        await callback.answer("Дата окончания не может быть раньше начала.", show_alert=True)
+        return
+    if stage == 1:
+        await state.update_data(ai_from=selected, ai_calendar_stage=2)
+        await callback.message.edit_text(
+            "Выберите конец периода:",
+            reply_markup=ai_calendar_kb(selected.year, selected.month, 2, today),
+        )
+        await callback.answer()
+        return
+
+    account = await crud.get_account_by_id(data.get("selected_account"))
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    await state.set_state(None)
+    await callback.answer()
+    await _report_then_dialogue(
+        callback.message, state, account,
+        custom_from=data["ai_from"], custom_to=selected,
+    )
+
+
 @router.message(AIForm.waiting_custom_dates)
 async def ai_custom_dates_handler(message: Message, state: FSMContext):
+    data = await state.get_data()
+    stage = data.get("ai_calendar_stage", 1)
+    today = datetime.now(timezone.utc).date()
+    selected_month = data.get("ai_from") or today
+    await state.update_data(ai_calendar_stage=stage)
+    await message.answer(
+        "Выберите даты кнопками календаря — ввод периода текстом отключён.",
+        reply_markup=ai_calendar_kb(selected_month.year, selected_month.month, stage, today),
+    )
+    return
+
     data = await state.get_data()
     account_id = data.get("selected_account")
 

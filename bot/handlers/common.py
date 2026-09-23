@@ -7,8 +7,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 
 from database import crud
-from bot.keyboards import main_menu_kb, accounts_kb, comparison_period_kb, report_calendar_kb
-from bot.states import ReportForm
+from bot.keyboards import main_menu_kb, accounts_kb, comparison_calendar_kb, report_calendar_kb
+from bot.states import ReportForm, ComparisonForm
 from datetime import datetime, timezone
 from bot.helpers import send_excel
 from utils.formatters import format_number
@@ -110,7 +110,13 @@ async def account_callback(callback: CallbackQuery, state: FSMContext):
     await state.update_data(selected_account=account_id)
 
     if flow == "comparison":
-        await callback.message.edit_text("📅 Выберите первый период:", reply_markup=comparison_period_kb())
+        today = datetime.now(timezone.utc).date()
+        await state.set_state(ComparisonForm.waiting_custom_dates)
+        await state.update_data(calendar_stage=1)
+        await callback.message.edit_text(
+            "Выберите начало первого периода:",
+            reply_markup=comparison_calendar_kb(today.year, today.month, 1, today),
+        )
     else:
         today = datetime.now(timezone.utc).date()
         await state.set_state(ReportForm.waiting_custom_dates)
