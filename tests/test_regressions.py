@@ -1,8 +1,9 @@
 import io
+import asyncio
 
 from openpyxl import load_workbook
 
-from bot.helpers import build_excel_from_context, parse_period_input
+from bot.helpers import build_excel_from_context, parse_period_input, send_long_text
 from reports.generator import _day_end, resolve_period
 
 
@@ -29,6 +30,20 @@ def test_day_end_is_available_for_digest_and_sync():
     from datetime import date, datetime
 
     assert _day_end(date(2026, 9, 23)) == datetime(2026, 9, 23, 23, 59, 59)
+
+
+def test_empty_message_is_replaced_with_fallback():
+    class FakeMessage:
+        def __init__(self):
+            self.messages = []
+
+        async def answer(self, text, **kwargs):
+            self.messages.append(text)
+
+    message = FakeMessage()
+    asyncio.run(send_long_text(message, "   "))
+    assert len(message.messages) == 1
+    assert message.messages[0]
 
 
 def test_comparison_excel_contains_comparison_sheet():

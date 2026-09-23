@@ -14,7 +14,12 @@ class AdminMiddleware(BaseMiddleware):
 
     async def __call__(self, handler, event: TelegramObject, data: dict):
         user = data.get("event_from_user")
-        if user is not None and user.id == settings.ADMIN_TELEGRAM_ID:
+        username = (getattr(user, "username", "") or "").lower()
+        username = username.lstrip("@")
+        allowed_by_username = username in settings.ALLOWED_TELEGRAM_USERNAMES
+        if user is not None and (
+            user.id == settings.ADMIN_TELEGRAM_ID or allowed_by_username
+        ):
             return await handler(event, data)
 
         if isinstance(event, Message) and event.text and event.text.startswith("/start"):

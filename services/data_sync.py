@@ -120,13 +120,13 @@ async def sync_account_data(account, since_dt: datetime, until_dt: datetime) -> 
                     await crud.save_daily_stats(
                         account_id=account.id,
                         stats_date=day_date,
-                        followers=0,  # recalculated below
-                        following=user_info.get("follows_count", 0),
-                        media_count=user_info.get("media_count", 0),
-                        reach=metrics.get("reach", 0),
-                        follower_count=metrics.get("follower_count", 0),
-                        views=metrics.get("views", 0),
-                        accounts_engaged=metrics.get("accounts_engaged", 0),
+                        followers=None,  # recalculated below when available
+                        following=user_info.get("follows_count"),
+                        media_count=user_info.get("media_count"),
+                        reach=metrics.get("reach"),
+                        follower_count=metrics.get("follower_count"),
+                        views=metrics.get("views"),
+                        accounts_engaged=metrics.get("accounts_engaged"),
                     )
             else:
                 try:

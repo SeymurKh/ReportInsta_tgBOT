@@ -376,16 +376,18 @@ class InstagramClient:
             posts.append({
                 "instagram_media_id": media["id"],
                 "media_type": media_type,
-                "caption": media.get("caption", ""),
-                "permalink": media.get("permalink", ""),
+                "caption": media.get("caption"),
+                "permalink": media.get("permalink"),
                 "timestamp": ts,
-                "likes": media.get("like_count", 0),
-                "comments": media.get("comments_count", 0),
-                "saved": insights.get("saved", 0),
-                "shares": insights.get("shares", 0),
-                "reach": insights.get("reach", 0),
-                "total_interactions": insights.get("total_interactions", 0),
-                "views": insights.get("views", 0),
+                "likes": media.get("like_count"),
+                "comments": media.get("comments_count"),
+                # None means that Instagram did not return this insight.
+                # CRUD preserves the previously stored value in that case.
+                "saved": insights.get("saved"),
+                "shares": insights.get("shares"),
+                "reach": insights.get("reach"),
+                "total_interactions": insights.get("total_interactions"),
+                "views": insights.get("views"),
                 "skip_insights": not fetch_insights,
             })
         return posts, partial

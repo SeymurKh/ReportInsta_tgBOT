@@ -12,6 +12,15 @@ def _get_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _get_usernames(name: str) -> set[str]:
+    raw = os.getenv(name, "")
+    return {
+        item.strip().lstrip("@").lower()
+        for item in raw.split(",")
+        if item.strip()
+    }
+
+
 class Settings:
     # Telegram
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
@@ -27,6 +36,9 @@ class Settings:
 
     # Admin
     ADMIN_TELEGRAM_ID: int = int(os.getenv("ADMIN_TELEGRAM_ID", "0") or "0")
+    ALLOWED_TELEGRAM_USERNAMES: set[str] = _get_usernames(
+        "ALLOWED_TELEGRAM_USERNAMES"
+    )
 
     # Instagram API
     INSTAGRAM_API_VERSION: str = os.getenv("INSTAGRAM_API_VERSION", "v25.0")

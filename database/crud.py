@@ -82,13 +82,13 @@ async def update_account_token(instagram_user_id: str, new_token: str) -> None:
 async def save_daily_stats(
     account_id: int,
     stats_date: date,
-    followers: int,
-    following: int,
-    media_count: int,
-    reach: int,
-    follower_count: int,
-    views: int = 0,
-    accounts_engaged: int = 0,
+    followers: int | None,
+    following: int | None,
+    media_count: int | None,
+    reach: int | None,
+    follower_count: int | None,
+    views: int | None = None,
+    accounts_engaged: int | None = None,
 ) -> None:
     async with async_session_factory() as session:
         existing = await session.execute(
@@ -99,19 +99,24 @@ async def save_daily_stats(
         row = existing.scalar_one_or_none()
 
         if row:
-            row.followers = followers
-            row.following = following
-            row.media_count = media_count
-            row.reach = reach
-            row.follower_count = follower_count
-            row.views = views
-            row.accounts_engaged = accounts_engaged
+            for field, value in {
+                "followers": followers,
+                "following": following,
+                "media_count": media_count,
+                "reach": reach,
+                "follower_count": follower_count,
+                "views": views,
+                "accounts_engaged": accounts_engaged,
+            }.items():
+                if value is not None:
+                    setattr(row, field, value)
         else:
             session.add(DailyStats(
                 account_id=account_id, date=stats_date,
-                followers=followers, following=following, media_count=media_count,
-                reach=reach, follower_count=follower_count,
-                views=views, accounts_engaged=accounts_engaged,
+                followers=followers or 0, following=following or 0,
+                media_count=media_count or 0, reach=reach or 0,
+                follower_count=follower_count or 0,
+                views=views or 0, accounts_engaged=accounts_engaged or 0,
             ))
 
         await session.commit()
@@ -194,20 +199,37 @@ async def save_posts(posts_data: list[dict]) -> None:
             row = existing.scalar_one_or_none()
 
             if row:
-                row.media_type = post["media_type"]
-                row.caption = post.get("caption", "")
-                row.permalink = post.get("permalink", "")
-                row.likes = post["likes"]
-                row.comments = post["comments"]
+                if post.get("media_type") is not None:
+                    row.media_type = post["media_type"]
+                if post.get("caption") is not None:
+                    row.caption = post["caption"]
+                if post.get("permalink") is not None:
+                    row.permalink = post["permalink"]
+                if post.get("likes") is not None:
+                    row.likes = post["likes"]
+                if post.get("comments") is not None:
+                    row.comments = post["comments"]
                 if not skip_insights:
-                    row.saved = post["saved"]
-                    row.shares = post.get("shares", 0)
-                    row.reach = post.get("reach", 0)
-                    row.total_interactions = post.get("total_interactions", 0)
-                    row.views = post.get("views", 0)
-                    row.insights_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                    insights_updated = False
+                    for field in ("saved", "shares", "reach", "total_interactions", "views"):
+                        value = post.get(field)
+                        if value is not None:
+                            setattr(row, field, value)
+                            insights_updated = True
+                    if insights_updated:
+                        row.insights_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             else:
-                if not skip_insights:
+                post["caption"] = post.get("caption") or ""
+                post["permalink"] = post.get("permalink") or ""
+                post["likes"] = post.get("likes") or 0
+                post["comments"] = post.get("comments") or 0
+                has_insights = any(
+                    post.get(field) is not None
+                    for field in ("saved", "shares", "reach", "total_interactions", "views")
+                )
+                for field in ("saved", "shares", "reach", "total_interactions", "views"):
+                    post[field] = post.get(field) or 0
+                if not skip_insights and has_insights:
                     post["insights_updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
                 session.add(Post(**post))
 

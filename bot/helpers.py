@@ -13,8 +13,13 @@ MAX_MESSAGE_LEN = 4096
 
 
 async def send_long_text(message: Message, text: str) -> None:
+    if not text or not text.strip():
+        await message.answer("⚠️ Не удалось сформировать текстовый отчёт.", parse_mode=None)
+        return
     for i in range(0, len(text), MAX_MESSAGE_LEN):
-        await message.answer(text[i:i + MAX_MESSAGE_LEN], parse_mode=None)
+        chunk = text[i:i + MAX_MESSAGE_LEN]
+        if chunk.strip():
+            await message.answer(chunk, parse_mode=None)
 
 
 async def send_charts(message: Message, charts: dict) -> None:

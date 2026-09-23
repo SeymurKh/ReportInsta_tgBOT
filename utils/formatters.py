@@ -86,7 +86,7 @@ def format_context_for_ai(context: dict) -> str:
         daily = context.get("daily_stats", [])
         if daily:
             lines.append("\nДанные по дням:")
-            for d in daily:
+            for d in daily[:14]:
                 lines.append(f"  {d['date']}: охват {d['reach']}, подписчики {d['followers']:+d}, "
                              f"просмотры {d['views']}, вовлечено {d['accounts_engaged']}")
 
@@ -95,7 +95,7 @@ def format_context_for_ai(context: dict) -> str:
         if publications:
             lines.append("\nПубликации по дням:")
             type_name = {"IMAGE": "Фото", "VIDEO": "Видео", "CAROUSEL_ALBUM": "Карусель", "REELS": "Reels"}
-            for day in publications:
+            for day in publications[:12]:
                 lines.append(f"  {day['date']}:")
                 for p in day["posts"]:
                     mtype = type_name.get(p["type"], p["type"])
@@ -118,4 +118,5 @@ def format_context_for_ai(context: dict) -> str:
         if best and best != "нет данных":
             lines.append(f"\nЛучший пост:\n{best}")
 
-    return "\n".join(lines)
+    # Keep repeated dialogue requests fast and leave the model room to answer.
+    return truncate_text("\n".join(lines), 14000)

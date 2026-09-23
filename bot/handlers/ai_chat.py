@@ -195,8 +195,11 @@ async def ai_dialogue_handler(message: Message, state: FSMContext):
 
         history.append({"role": "user", "content": message.text})
         history.append({"role": "assistant", "content": answer})
-        if len(history) > 20:  # prevent token overflow
-            history = history[-20:]
+        # Keep the dialogue useful for follow-up questions without growing
+        # the FSM payload indefinitely. The analyzer applies a second bound
+        # before sending messages to OpenAI.
+        if len(history) > 12:
+            history = history[-12:]
         await state.update_data(dialogue_history=history)
 
         await message.answer(answer, parse_mode=None, reply_markup=dialogue_kb())
