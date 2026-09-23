@@ -266,13 +266,19 @@ def generate_excel_report(
         ws4.sheet_properties.tabColor = "A5A5A5"
         _title(ws4, "Диалог с AI", f"@{account_username}  •  {period_str}", 2)
         ws4.column_dimensions["A"].width = 16
-        ws4.column_dimensions["B"].width = 100
+        ws4.column_dimensions["B"].width = 72
         _hs(ws4.cell(row=4, column=1, value="Роль"))
         _hs(ws4.cell(row=4, column=2, value="Сообщение"))
         for i, message in enumerate(dialogue_history, 5):
             ws4.cell(row=i, column=1, value="Вопрос" if message.get("role") == "user" else "Ответ")
-            ws4.cell(row=i, column=2, value=message.get("content", ""))
+            content = str(message.get("content", ""))
+            ws4.cell(row=i, column=2, value=content)
+            # Approximate the displayed height so long AI answers remain readable.
+            visual_lines = max(1, (len(content) // 95) + content.count("\n") + 1)
+            ws4.row_dimensions[i].height = min(180, max(24, visual_lines * 15))
         _style_body(ws4, 5, 4 + len(dialogue_history), 1, 2)
+        for i in range(5, 5 + len(dialogue_history)):
+            ws4.cell(row=i, column=2).alignment = Alignment(wrap_text=True, vertical="top")
         ws4.freeze_panes = "A5"
 
     # Comparison.
