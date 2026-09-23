@@ -1,6 +1,6 @@
 """Period comparison flow (calendar weeks/months + custom dates)."""
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -82,7 +82,7 @@ async def comparison_period_callback(callback: CallbackQuery, state: FSMContext)
         return
 
     comp_type = callback.data.split("_")[1]
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
 
     if comp_type == "week":
         periods = _calendar_weeks(today)
@@ -121,7 +121,9 @@ async def custom_comparison_dates_handler(message: Message, state: FSMContext):
         return
 
     try:
-        p1_from, p1_to, p2_from, p2_to = parse_comparison_input(message.text, date.today())
+        p1_from, p1_to, p2_from, p2_to = parse_comparison_input(
+            message.text, datetime.now(timezone.utc).date()
+        )
     except ValueError:
         # State is NOT cleared — user can retry immediately
         await message.answer(

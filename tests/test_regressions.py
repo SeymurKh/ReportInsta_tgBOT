@@ -39,7 +39,8 @@ def test_comparison_excel_contains_comparison_sheet():
     workbook = load_workbook(filename=io.BytesIO(data), read_only=True)
 
     assert filename.endswith(".xlsx")
-    comparison_sheet = workbook[workbook.sheetnames[-1]]
+    assert "Сравнение" in workbook.sheetnames
+    comparison_sheet = workbook["Сравнение"]
     values = [cell.value for row in comparison_sheet.iter_rows() for cell in row]
     assert 10 in values
     assert 20 in values

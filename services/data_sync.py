@@ -112,6 +112,7 @@ async def sync_account_data(account, since_dt: datetime, until_dt: datetime) -> 
                     _to_unix(since_dt), _to_unix(until_dt), days_to_fetch
                 )
                 user_info = snapshot["user_info"]
+                partial = partial or snapshot.get("partial", False)
                 for day_str, metrics in snapshot["insights"].items():
                     day_date = date.fromisoformat(day_str)
                     if day_date not in days_to_fetch:

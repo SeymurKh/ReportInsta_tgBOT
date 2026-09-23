@@ -101,8 +101,8 @@ def create_comparison_chart(labels: list[str], p1_values: list, p2_values: list,
 def create_accounts_comparison_chart(accounts_data: list[dict]) -> bytes:
     fig, ax = plt.subplots()
     if not accounts_data:
-        ax.set_title("Ð¡Ñ€Ð°Ð²Ð½ÐµÐ½Ð¸Ðµ Ð°ÐºÐºÐ°ÑƒÐ½Ñ‚Ð¾Ð²", fontsize=14, fontweight="bold")
-        ax.text(0.5, 0.5, "ÐÐµÑ‚ Ð´Ð°Ð½Ð½Ñ‹Ñ…", ha="center", va="center")
+        ax.set_title("Сравнение аккаунтов", fontsize=14, fontweight="bold")
+        ax.text(0.5, 0.5, "Нет данных", ha="center", va="center")
         ax.set_axis_off()
         return _to_bytes(fig)
     names = [a["name"][:15] for a in accounts_data]

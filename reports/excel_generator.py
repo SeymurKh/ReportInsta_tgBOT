@@ -171,28 +171,28 @@ def generate_excel_report(
             c.alignment = Alignment(wrap_text=True)
 
     if comparison_periods:
-        ws_cmp = wb.create_sheet("Ð¡Ñ€Ð°Ð²Ð½ÐµÐ½Ð¸Ðµ")
-        headers = ["ÐŸÐ¾ÐºÐ°Ð·Ð°Ñ‚ÐµÐ»ÑŒ", "ÐŸÐµÑ€Ð¸Ð¾Ð´ 1", "ÐŸÐµÑ€Ð¸Ð¾Ð´ 2"]
+        ws_cmp = wb.create_sheet("Сравнение")
+        headers = ["Показатель", "Период 1", "Период 2"]
         for col, header in enumerate(headers, 1):
             _hs(ws_cmp.cell(row=1, column=col, value=header))
         p1, p2 = comparison_periods
         metric_groups = [
-            ("Ð¡Ñ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ°", [
-                ("ÐŸÑ€Ð¸Ñ€Ð¾ÑÑ‚ ÑÐ»ÐµÐ´Ð¾Ð²Ð°Ñ‚ÐµÐ»ÐµÐ¹", "followers_growth"),
-                ("ÐžÑ…Ð²Ð°Ñ‚", "reach_total"),
-                ("ÐŸÑ€Ð¾ÑÐ¼Ð¾Ñ‚Ñ€Ñ‹", "views_total"),
-                ("Ð’Ð¾Ð²Ð»ÐµÑ‡ÐµÐ½Ð¾", "accounts_engaged_total"),
+            ("Статистика", [
+                ("Прирост подписчиков", "followers_growth"),
+                ("Охват", "reach_total"),
+                ("Просмотры", "views_total"),
+                ("Вовлечено", "accounts_engaged_total"),
             ], "stats"),
-            ("ÐšÐ¾Ð½Ñ‚ÐµÐ½Ñ‚", [
-                ("ÐŸÑƒÐ±Ð»Ð¸ÐºÐ°Ñ†Ð¸Ð¸", "total_posts"),
-                ("Ð›Ð°Ð¹ÐºÐ¸", "total_likes"),
-                ("ÐšÐ¾Ð¼Ð¼ÐµÐ½Ñ‚Ð°Ñ€Ð¸Ð¸", "total_comments"),
+            ("Контент", [
+                ("Публикации", "total_posts"),
+                ("Лайки", "total_likes"),
+                ("Комментарии", "total_comments"),
                 ("ER %", "engagement_rate"),
             ], "content"),
-            ("Ð¡Ñ‚Ð¾Ñ€Ð¸Ñ", [
-                ("ÐšÐ¾Ð»Ð¸Ñ‡ÐµÑÑ‚Ð²Ð¾", "total_stories"),
-                ("ÐŸÑ€Ð¾ÑÐ¼Ð¾Ñ‚Ñ€Ñ‹", "total_views"),
-                ("ÐžÑ‚Ð²ÐµÑ‚Ñ‹", "total_replies"),
+            ("Stories", [
+                ("Количество", "total_stories"),
+                ("Просмотры", "total_views"),
+                ("Ответы", "total_replies"),
             ], "stories"),
         ]
         row = 2

@@ -1,6 +1,6 @@
 """Report flow: period selection + custom dates (stories are a section of the report)."""
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -85,7 +85,9 @@ async def custom_dates_handler(message: Message, state: FSMContext):
         return
 
     try:
-        date_from, date_to = parse_period_input(message.text, date.today())
+        date_from, date_to = parse_period_input(
+            message.text, datetime.now(timezone.utc).date()
+        )
     except ValueError:
         # State is NOT cleared — user can retry immediately
         await message.answer(

@@ -100,7 +100,13 @@ class InstagramClient:
         for attempt in range(3):
             try:
                 async with session.get(url, params=params) as resp:
-                    data = await resp.json(content_type=None)
+                    try:
+                        data = await resp.json(content_type=None)
+                    except (aiohttp.ClientError, ValueError) as e:
+                        if attempt < 2:
+                            await asyncio.sleep(2 ** attempt * 2)
+                            continue
+                        raise InstagramAPIError(f"Invalid API response: {e}") from e
                     if resp.status == 200:
                         return data
                     error = data.get("error", {})
@@ -112,11 +118,14 @@ class InstagramClient:
                         # Story/media has < 5 viewers — insights unavailable,
                         # this is not a failure, treat as empty data.
                         raise NotEnoughViewersError(msg)
-                    if code == 4:  # application-level rate limit
+                    if code == 4 or resp.status == 429:  # application/HTTP rate limit
                         await asyncio.sleep(2 ** attempt * 5)
                         continue
-                    if code == 190:
+                    if str(code) == "190":
                         raise TokenExpiredError("Token expired")
+                    if resp.status in {408, 500, 502, 503, 504} and attempt < 2:
+                        await asyncio.sleep(2 ** attempt * 2)
+                        continue
                     raise InstagramAPIError(f"[{code}]: {msg}")
             except aiohttp.ClientError as e:
                 if attempt < 2:
@@ -280,7 +289,7 @@ class InstagramClient:
 
         semaphore = asyncio.Semaphore(5)
 
-        async def fetch_day(day_dt: datetime):
+        async def fetch_day(day_dt: datetime) -> bool:
             day_str = day_dt.strftime("%Y-%m-%d")
             day_start = int(day_dt.timestamp())
             day_end = int((day_dt + timedelta(days=1)).timestamp())
@@ -293,11 +302,16 @@ class InstagramClient:
                         insights.setdefault(day_str, {})[name] = value
                 except Exception as e:
                     logger.warning(f"Failed to get new metrics for {day_str}: {e}")
+                    return False
+            return True
 
         if days:
-            await asyncio.gather(*(fetch_day(d) for d in days))
+            results = await asyncio.gather(*(fetch_day(d) for d in days))
+            partial = not all(results)
+        else:
+            partial = False
 
-        return {"user_info": user_info, "insights": insights}
+        return {"user_info": user_info, "insights": insights, "partial": partial}
 
     async def collect_posts_with_insights(
         self, date_from: datetime, date_to: datetime,
