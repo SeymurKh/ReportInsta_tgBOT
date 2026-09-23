@@ -23,6 +23,30 @@ TYPE_NAME = {"IMAGE": "Фото", "VIDEO": "Видео", "CAROUSEL_ALBUM": "Ка
 WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 
+def _day_end(value: date) -> datetime:
+    """Return the UTC end-of-day for a calendar date."""
+    return datetime(value.year, value.month, value.day, 23, 59, 59)
+
+
+def resolve_period(
+    period: str = "week",
+    custom_date_from: date | None = None,
+    custom_date_to: date | None = None,
+) -> tuple[date, date]:
+    """Resolve a report period using UTC calendar dates."""
+    today = utc_now_naive().date()
+    if custom_date_from is not None or custom_date_to is not None:
+        if custom_date_from is None or custom_date_to is None:
+            raise ValueError("both custom period dates are required")
+        if custom_date_from > custom_date_to:
+            raise ValueError("custom period start is after its end")
+        if custom_date_to > today:
+            raise ValueError("future report dates are not supported")
+        return custom_date_from, custom_date_to
+    days = settings.PERIODS.get(period, 7)
+    return today - timedelta(days=days), today - timedelta(days=1)
+
+
 async def _fetch_and_save_data(account, since_dt: datetime, until_dt: datetime) -> dict:
     """Fetch data through the shared synchronization service.
 

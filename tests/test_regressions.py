@@ -3,6 +3,7 @@ import io
 from openpyxl import load_workbook
 
 from bot.helpers import build_excel_from_context, parse_period_input
+from reports.generator import _day_end, resolve_period
 
 
 def test_parse_period_rejects_future_date():
@@ -13,6 +14,21 @@ def test_parse_period_rejects_future_date():
     except ValueError:
         return
     raise AssertionError("future dates must be rejected")
+
+
+def test_resolve_period_supports_default_week():
+    from datetime import date
+
+    start, end = resolve_period("week")
+    assert isinstance(start, date)
+    assert isinstance(end, date)
+    assert (end - start).days == 6
+
+
+def test_day_end_is_available_for_digest_and_sync():
+    from datetime import date, datetime
+
+    assert _day_end(date(2026, 9, 23)) == datetime(2026, 9, 23, 23, 59, 59)
 
 
 def test_comparison_excel_contains_comparison_sheet():
