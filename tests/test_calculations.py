@@ -4,6 +4,7 @@ from datetime import date, datetime
 from analytics.calculations import (
     calculate_growth, calculate_period_summary, calculate_content_summary,
     calculate_stories_summary, get_best_story, detect_trend, score_post,
+    top_posts_by_metric, compare_content_formats, daily_peaks, data_quality_summary,
 )
 
 
@@ -148,3 +149,53 @@ def test_score_post():
 
 def test_detect_trend_short_list():
     assert detect_trend([FakeStats(date(2026, 9, 1))], "followers") == "stable"
+
+
+def test_detect_trend_uses_two_halves_for_week():
+    stats = [
+        FakeStats(date(2026, 9, day), follower_count=1)
+        for day in range(1, 5)
+    ] + [
+        FakeStats(date(2026, 9, day), follower_count=10)
+        for day in range(5, 8)
+    ]
+    assert detect_trend(stats, "follower_count") == "growing"
+
+
+def test_detect_trend_detects_decline_for_short_period():
+    stats = [
+        FakeStats(date(2026, 9, day), follower_count=10)
+        for day in range(1, 5)
+    ] + [
+        FakeStats(date(2026, 9, day), follower_count=1)
+        for day in range(5, 8)
+    ]
+    assert detect_trend(stats, "follower_count") == "declining"
+
+
+def test_top_posts_and_format_comparison_are_data_grounded():
+    posts = [
+        FakePost("REELS", reach=200, total_interactions=30),
+        FakePost("IMAGE", reach=100, total_interactions=10),
+    ]
+    assert top_posts_by_metric(posts)[0]["media_type"] == "REELS"
+    formats = compare_content_formats(posts)
+    assert formats["REELS"]["reach_avg"] == 200
+    assert formats["IMAGE"]["engagement_rate"] == 10.0
+
+
+def test_daily_peaks_and_quality_summary():
+    stats = [
+        FakeStats(date(2026, 9, 1), reach=100),
+        FakeStats(date(2026, 9, 2), reach=300),
+    ]
+    stats[0].is_partial = False
+    stats[1].is_partial = True
+    assert daily_peaks(stats)[0] == {
+        "date": "2026-09-02", "metric": "reach", "value": 300,
+    }
+    quality = data_quality_summary(stats, expected_days=3)
+    assert quality == {
+        "available_days": 2, "expected_days": 3, "missing_days": 1,
+        "partial_days": 1, "complete": False,
+    }

@@ -1,5 +1,6 @@
 import json
 import os
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -39,6 +40,7 @@ class Settings:
     ALLOWED_TELEGRAM_USERNAMES: set[str] = _get_usernames(
         "ALLOWED_TELEGRAM_USERNAMES"
     )
+    APP_TIMEZONE: str = os.getenv("APP_TIMEZONE", "Asia/Baku")
 
     # Instagram API
     INSTAGRAM_API_VERSION: str = os.getenv("INSTAGRAM_API_VERSION", "v25.0")
@@ -73,6 +75,13 @@ class Settings:
     DATA_SYNC_ENABLED: bool = _get_bool("DATA_SYNC_ENABLED", True)
     DATA_SYNC_INTERVAL_HOURS: float = float(os.getenv("DATA_SYNC_INTERVAL_HOURS", "6"))
     DATA_SYNC_WINDOW_DAYS: int = int(os.getenv("DATA_SYNC_WINDOW_DAYS", "30"))
+    SYNC_LEASE_TTL_SECONDS: int = int(os.getenv("SYNC_LEASE_TTL_SECONDS", "7200"))
+
+    # Local SQLite maintenance
+    BACKUP_ENABLED: bool = _get_bool("BACKUP_ENABLED", True)
+    BACKUP_INTERVAL_HOURS: float = float(os.getenv("BACKUP_INTERVAL_HOURS", "24"))
+    BACKUP_RETENTION_DAYS: int = int(os.getenv("BACKUP_RETENTION_DAYS", "14"))
+    BACKUP_DIR: str = os.getenv("BACKUP_DIR", "data/backups")
 
     # Tiered post-insights refresh (post age -> refresh policy)
     POSTS_HOT_DAYS: int = int(os.getenv("POSTS_HOT_DAYS", "3"))       # <= N days: every sync
@@ -111,6 +120,16 @@ class Settings:
                         errors.append(f"INSTAGRAM_ACCOUNTS[{i}] is missing '{key}'")
         if not self.OPENAI_API_KEY:
             warnings.append("OPENAI_API_KEY is not set — AI analysis and chat will be unavailable")
+        try:
+            ZoneInfo(self.APP_TIMEZONE)
+        except ZoneInfoNotFoundError:
+            errors.append(f"APP_TIMEZONE is invalid: {self.APP_TIMEZONE}")
+        if self.SYNC_LEASE_TTL_SECONDS <= 0:
+            errors.append("SYNC_LEASE_TTL_SECONDS must be greater than 0")
+        if self.BACKUP_INTERVAL_HOURS <= 0:
+            errors.append("BACKUP_INTERVAL_HOURS must be greater than 0")
+        if self.BACKUP_RETENTION_DAYS <= 0:
+            errors.append("BACKUP_RETENTION_DAYS must be greater than 0")
 
         return errors, warnings
 

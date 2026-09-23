@@ -109,13 +109,84 @@ def get_worst_post(posts: list):
     return min(posts, key=score_post)
 
 
+_POST_METRICS = {
+    "reach", "likes", "comments", "saved", "shares", "views", "total_interactions",
+}
+
+
+def top_posts_by_metric(posts: list, metric: str = "total_interactions", limit: int = 3) -> list[dict]:
+    """Return compact, deterministic post facts for reports and AI context."""
+    if metric not in _POST_METRICS or limit <= 0:
+        return []
+    ranked = sorted(posts, key=lambda post: getattr(post, metric, 0) or 0, reverse=True)
+    return [{
+        "media_type": post.media_type,
+        "caption": (post.caption or "").replace("\n", " ").strip()[:100],
+        "metric": metric,
+        "value": getattr(post, metric, 0) or 0,
+        "reach": post.reach or 0,
+        "interactions": post.total_interactions or 0,
+        "permalink": post.permalink or "",
+    } for post in ranked[:limit]]
+
+
+def compare_content_formats(posts: list) -> dict[str, dict]:
+    """Aggregate post performance by format without mixing raw totals."""
+    groups: dict[str, list] = {}
+    for post in posts:
+        groups.setdefault(post.media_type, []).append(post)
+    result = {}
+    for media_type, items in groups.items():
+        total_reach = sum((p.reach or 0) for p in items)
+        total_interactions = sum((p.total_interactions or 0) for p in items)
+        result[media_type] = {
+            "posts": len(items),
+            "reach_total": total_reach,
+            "reach_avg": round(total_reach / len(items)) if items else 0,
+            "interactions_total": total_interactions,
+            "interactions_avg": round(total_interactions / len(items)) if items else 0,
+            "engagement_rate": round(total_interactions / total_reach * 100, 1) if total_reach else 0.0,
+        }
+    return result
+
+
+def daily_peaks(stats_list: list, metric: str = "reach", limit: int = 3) -> list[dict]:
+    """Return highest days for an account metric."""
+    allowed = {"reach", "views", "accounts_engaged", "follower_count"}
+    if metric not in allowed or limit <= 0:
+        return []
+    ranked = sorted(stats_list, key=lambda row: getattr(row, metric, 0) or 0, reverse=True)
+    return [{"date": row.date.isoformat(), "metric": metric, "value": getattr(row, metric, 0) or 0}
+            for row in ranked[:limit]]
+
+
+def data_quality_summary(stats_list: list, expected_days: int | None = None) -> dict:
+    """Describe completeness without interpreting missing metrics as zero."""
+    partial_days = sum(1 for row in stats_list if getattr(row, "is_partial", False))
+    available_days = len(stats_list)
+    missing_days = max(expected_days - available_days, 0) if expected_days is not None else None
+    return {
+        "available_days": available_days,
+        "expected_days": expected_days,
+        "missing_days": missing_days,
+        "partial_days": partial_days,
+        "complete": (missing_days == 0 and partial_days == 0)
+        if expected_days is not None else partial_days == 0,
+    }
+
+
 def detect_trend(stats_list: list, metric: str = "followers", window: int = 7) -> str:
-    if len(stats_list) < window:
+    if len(stats_list) < 2:
         return "stable"
     values = [getattr(s, metric, 0) for s in stats_list]
-    recent_avg = sum(values[-window:]) / window
-    overall_avg = sum(values) / len(values)
-    diff_pct = ((recent_avg - overall_avg) / overall_avg * 100) if overall_avg else 0
+    # Compare two adjacent windows. For a one-week report this uses the
+    # first and second half instead of comparing a window to itself.
+    effective_window = min(window, max(1, len(values) // 2))
+    baseline = values[-2 * effective_window:-effective_window]
+    recent = values[-effective_window:]
+    baseline_avg = sum(baseline) / len(baseline)
+    recent_avg = sum(recent) / len(recent)
+    diff_pct = ((recent_avg - baseline_avg) / abs(baseline_avg) * 100) if baseline_avg else 0
 
     if diff_pct > 5:
         return "growing"

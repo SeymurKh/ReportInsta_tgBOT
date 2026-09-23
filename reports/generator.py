@@ -7,7 +7,8 @@ from instagram.client import utc_now_naive
 from services.data_sync import sync_account_data
 from analytics.calculations import (
     calculate_period_summary, calculate_content_summary, calculate_stories_summary,
-    get_best_post, get_best_story, detect_trend,
+    get_best_post, get_best_story, detect_trend, top_posts_by_metric,
+    compare_content_formats, daily_peaks, data_quality_summary,
 )
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from reports.charts import (
@@ -170,7 +171,7 @@ async def generate_report(
             f"❤️ {best.likes} | 💬 {best.comments} | 💾 {best.saved} | 📤 {best.shares} | Охват {format_number(best.reach)}\n"
             f"{best.permalink}"
         )
-    trend = detect_trend(stats_list, "followers")
+    trend = detect_trend(stats_list, "follower_count")
     period_str = format_period(date_from, date_to)
 
     analyzer = get_analyzer()
@@ -214,7 +215,6 @@ async def generate_report(
 👥 Подписчики
 Текущие: {format_number(stats_summary['followers_end'])}
 Прирост: {format_growth(stats_summary['followers_growth'])} ({format_pct(stats_summary['followers_growth_pct'])})
-(Подписки − отписки; отдельной метрики отписок в Instagram API нет)
 Тренд: {trend_map.get(trend, trend)}
 
 📈 Активность
@@ -288,6 +288,12 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
         "trend": trend,
         "daily_stats": daily_stats_data,
         "publications": publications_data,
+        "top_posts": top_posts_by_metric(posts_list),
+        "format_performance": compare_content_formats(posts_list),
+        "daily_peaks": daily_peaks(stats_list),
+        "data_quality": data_quality_summary(
+            stats_list, expected_days=(date_to - date_from).days + 1
+        ),
         "ai_analysis": ai_analysis,
     }
 
@@ -302,6 +308,13 @@ async def generate_comparison_periods_report(
     period2_from: date, period2_to: date,
 ) -> dict:
     """Compare two periods."""
+    if period1_from > period1_to or period2_from > period2_to:
+        raise ValueError("Дата начала периода не может быть позже даты окончания")
+    if period1_from <= period2_to and period2_from <= period1_to:
+        raise ValueError("Периоды сравнения не должны пересекаться")
+
+    period1_days = (period1_to - period1_from).days + 1
+    period2_days = (period2_to - period2_from).days + 1
     p1_since_dt = datetime(period1_from.year, period1_from.month, period1_from.day)
     p1_until_dt = _day_end(period1_to)
     p2_since_dt = datetime(period2_from.year, period2_from.month, period2_from.day)
@@ -324,6 +337,10 @@ async def generate_comparison_periods_report(
     s2 = calculate_period_summary(p2_stats)
     c1 = calculate_content_summary(p1_posts)
     c2 = calculate_content_summary(p2_posts)
+    formats1 = compare_content_formats(p1_posts)
+    formats2 = compare_content_formats(p2_posts)
+    top1 = top_posts_by_metric(p1_posts)
+    top2 = top_posts_by_metric(p2_posts)
     st1 = calculate_stories_summary(p1_stories)
     st2 = calculate_stories_summary(p2_stories)
 
@@ -344,13 +361,31 @@ async def generate_comparison_periods_report(
             return f"{emoji} {label}: {v1:.1f} → {v2:.1f} ({sign}{d:.1f}{pct_str})"
         return f"{emoji} {label}: {format_number(v1)} → {format_number(v2)} ({sign}{format_number(d)}{pct_str})"
 
+    def daily_average(summary, available_days, field):
+        """Normalize a period total by calendar days, preserving missing data."""
+        total = summary[field]
+        return round(total / available_days) if available_days else 0
+
+    p1_available = len(p1_stats)
+    p2_available = len(p2_stats)
+    p1_reach_daily = daily_average(s1, p1_available, "reach_total")
+    p2_reach_daily = daily_average(s2, p2_available, "reach_total")
+    p1_views_daily = daily_average(s1, p1_available, "views_total")
+    p2_views_daily = daily_average(s2, p2_available, "views_total")
+    p1_engaged_daily = daily_average(s1, p1_available, "accounts_engaged_total")
+    p2_engaged_daily = daily_average(s2, p2_available, "accounts_engaged_total")
+
     lines = [
         f"📊 Сравнение периодов: {p1_str} vs {p2_str}\n",
+        f"Данные: период 1 — {p1_available}/{period1_days} дн., период 2 — {p2_available}/{period2_days} дн.",
         diff_str("Прирост подписчиков", s1["followers_growth"], s2["followers_growth"]),
         "",
         diff_str("Охват (итого)", s1["reach_total"], s2["reach_total"]),
+        diff_str("Охват в день", p1_reach_daily, p2_reach_daily),
         diff_str("Просмотры (итого)", s1["views_total"], s2["views_total"]),
+        diff_str("Просмотры в день", p1_views_daily, p2_views_daily),
         diff_str("Вовлечено аккаунтов", s1["accounts_engaged_total"], s2["accounts_engaged_total"]),
+        diff_str("Вовлечено в день", p1_engaged_daily, p2_engaged_daily),
         "",
         diff_str("Публикаций", c1["total_posts"], c2["total_posts"]),
         diff_str("Лайки (итого)", c1["total_likes"], c2["total_likes"]),
@@ -365,6 +400,25 @@ async def generate_comparison_periods_report(
         diff_str("Ответы на сторис", st1["total_replies"], st2["total_replies"]),
     ]
 
+    lines.append("")
+    lines.append("Форматы контента:")
+    for media_type in sorted(set(formats1) | set(formats2)):
+        left = formats1.get(media_type, {})
+        right = formats2.get(media_type, {})
+        lines.append(
+            f"• {media_type}: {left.get('posts', 0)} → {right.get('posts', 0)} постов; "
+            f"средний охват {left.get('reach_avg', 0)} → {right.get('reach_avg', 0)}; "
+            f"ER {left.get('engagement_rate', 0)}% → {right.get('engagement_rate', 0)}%"
+        )
+    lines.extend(["", "Топ публикации:"])
+    for label, posts in (("Период 1", top1), ("Период 2", top2)):
+        best = posts[0] if posts else None
+        lines.append(
+            f"• {label}: {best['media_type']}, {best['value']} взаимодействий, "
+            f"охват {best['reach']} — «{best['caption']}»"
+            if best else f"• {label}: данных нет"
+        )
+
     analyzer = get_analyzer()
     if analyzer:
         comparison_data = (
@@ -377,6 +431,22 @@ async def generate_comparison_periods_report(
             f"лайки {c2['total_likes']}, ER {c2['engagement_rate']}%, постов {c2['total_posts']}, "
             f"сторис {st2['total_stories']} (просмотры {st2['total_views']})"
         )
+        comparison_data += "\n\nFORMAT PERFORMANCE BY PERIOD:\n"
+        for media_type in sorted(set(formats1) | set(formats2)):
+            left = formats1.get(media_type, {})
+            right = formats2.get(media_type, {})
+            comparison_data += (
+                f"{media_type}: P1 posts={left.get('posts', 0)}, avg_reach={left.get('reach_avg', 0)}, "
+                f"ER={left.get('engagement_rate', 0)}%; "
+                f"P2 posts={right.get('posts', 0)}, avg_reach={right.get('reach_avg', 0)}, "
+                f"ER={right.get('engagement_rate', 0)}%\n"
+            )
+        comparison_data += (
+            f"Data availability: P1 {p1_available}/{period1_days} days, "
+            f"P2 {p2_available}/{period2_days} days.\n"
+            f"Top P1: {(top1[0] if top1 else 'no data')}\n"
+            f"Top P2: {(top2[0] if top2 else 'no data')}"
+        )
         ai_analysis = await analyzer.analyze_comparison(comparison_data)
     else:
         ai_analysis = AI_UNAVAILABLE_TEXT
@@ -384,12 +454,20 @@ async def generate_comparison_periods_report(
     lines.append(f"\n🤖 AI-сравнение\n{ai_analysis}")
     text = "\n".join(lines) + _warnings_block(api_delay_dates, partial)
 
-    charts = {"comparison": create_comparison_chart(
+    charts = {
+        "comparison_totals": create_comparison_chart(
         ["Подписчики", "Охват", "Просмотры", "Посты", "Сторис"],
         [s1["followers_growth"], s1["reach_total"], s1["views_total"], c1["total_posts"], st1["total_stories"]],
         [s2["followers_growth"], s2["reach_total"], s2["views_total"], c2["total_posts"], st2["total_stories"]],
         p1_str, p2_str,
-    )}
+        ),
+        "comparison_daily": create_comparison_chart(
+            ["Охват / день", "Просмотры / день", "Вовлечённость / день"],
+            [p1_reach_daily, p1_views_daily, p1_engaged_daily],
+            [p2_reach_daily, p2_views_daily, p2_engaged_daily],
+            p1_str, p2_str,
+        ),
+    }
 
     context = {
         "account": f"@{account.username} — {account.name}",
@@ -399,6 +477,12 @@ async def generate_comparison_periods_report(
         "type": "comparison",
         "period1": {"name": p1_str, "stats": s1, "content": c1, "stories": st1},
         "period2": {"name": p2_str, "stats": s2, "content": c2, "stories": st2},
+        "comparison_formats": {"period1": formats1, "period2": formats2},
+        "comparison_top_posts": {"period1": top1, "period2": top2},
+        "period_days": {
+            "period1": period1_days, "period2": period2_days,
+            "available1": p1_available, "available2": p2_available,
+        },
         "ai_analysis": ai_analysis,
     }
 
@@ -407,9 +491,9 @@ async def generate_comparison_periods_report(
 
 # ────────────────────── Daily digest (for scheduler) ──────────────────────
 
-async def generate_daily_digest(account) -> str:
-    """Compact one-account summary for yesterday. Used by the daily auto-report."""
-    yesterday = utc_now_naive().date() - timedelta(days=1)
+async def generate_daily_digest(account, target_date: date | None = None) -> str:
+    """Compact one-account summary for a target date."""
+    yesterday = target_date or (utc_now_naive().date() - timedelta(days=1))
     since_dt = datetime(yesterday.year, yesterday.month, yesterday.day)
     until_dt = _day_end(yesterday)
 

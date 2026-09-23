@@ -7,6 +7,9 @@ refresh policy for post insights to stay well under API rate limits.
 All datetimes are naive UTC.
 """
 import logging
+import asyncio
+import os
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from config import settings
@@ -14,6 +17,12 @@ from database import crud
 from instagram.client import InstagramClient, utc_now_naive
 
 logger = logging.getLogger(__name__)
+
+_account_sync_locks: dict[int, asyncio.Lock] = {}
+
+
+def _account_lock(account_id: int) -> asyncio.Lock:
+    return _account_sync_locks.setdefault(account_id, asyncio.Lock())
 
 
 def _to_unix(dt: datetime) -> int:
@@ -76,6 +85,46 @@ def make_insights_filter(posts_cached: list, now: datetime):
 
 
 async def sync_account_data(account, since_dt: datetime, until_dt: datetime) -> dict:
+    """Synchronize one account and persist an observable sync status."""
+    lock = _account_lock(account.id)
+    if lock.locked():
+        logger.warning("Skipping overlapping sync for @%s", account.username)
+        return {"skipped": True, "reason": "already_running", "partial": True}
+    async with lock:
+        owner = f"pid:{os.getpid()}:{uuid.uuid4().hex}"
+        if not await crud.acquire_sync_lease(
+            account.id, owner, ttl_seconds=settings.SYNC_LEASE_TTL_SECONDS
+        ):
+            logger.warning("Skipping cross-process overlapping sync for @%s", account.username)
+            return {"skipped": True, "reason": "lease_held", "partial": True}
+        run_id: int | None = None
+        try:
+            run_id = await crud.start_sync_run(account.id, since_dt.date(), until_dt.date())
+            await crud.update_account_sync_status(account.id, "running")
+            result = await _sync_account_data_impl(account, since_dt, until_dt)
+        except Exception as error:
+            if run_id is not None:
+                await crud.finish_sync_run(run_id, "failed", str(error))
+            await crud.update_account_sync_status(account.id, "failed", str(error))
+            raise
+        else:
+            await crud.finish_sync_run(
+                run_id,
+                "partial" if result.get("partial") else "success",
+                api_delay_days=len(result.get("api_delay_dates", [])),
+                is_partial=bool(result.get("partial")),
+            )
+            await crud.update_account_sync_status(
+                account.id,
+                "partial" if result.get("partial") else "success",
+                None,
+            )
+            return result
+        finally:
+            await crud.release_sync_lease(account.id, owner)
+
+
+async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetime) -> dict:
     """Fetch fresh data from Instagram API where needed and save to DB.
 
     Uses the DB cache for days older than CACHE_FRESHNESS_HOURS and the
@@ -127,6 +176,8 @@ async def sync_account_data(account, since_dt: datetime, until_dt: datetime) -> 
                         follower_count=metrics.get("follower_count"),
                         views=metrics.get("views"),
                         accounts_engaged=metrics.get("accounts_engaged"),
+                        collected_at=now,
+                        is_partial=partial,
                     )
             else:
                 try:

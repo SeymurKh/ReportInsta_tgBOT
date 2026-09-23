@@ -65,6 +65,9 @@ def build_excel_from_context(context: dict, dialogue_history: list | None) -> tu
         stories_summary=context.get("stories"),
         stories_list=context.get("stories_list"),
         comparison_periods=list(comparison) if is_comparison else None,
+        comparison_period_days=context.get("period_days"),
+        comparison_formats=context.get("comparison_formats"),
+        comparison_top_posts=context.get("comparison_top_posts"),
     )
     filename = f"report_{context.get('period', 'period').replace(' ', '_').replace('–', '-')}.xlsx"
     return excel_bytes, filename

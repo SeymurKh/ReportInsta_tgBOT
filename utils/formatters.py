@@ -69,6 +69,29 @@ def format_context_for_ai(context: dict) -> str:
                          f"просмотры {st1.get('total_views', 0)}, ответы {st1.get('total_replies', 0)}")
             lines.append(f"Сторис период 2: {st2.get('total_stories', 0)} шт, "
                          f"просмотры {st2.get('total_views', 0)}, ответы {st2.get('total_replies', 0)}")
+        comparison_formats = context.get("comparison_formats", {})
+        if comparison_formats:
+            lines.append("\nФорматы по периодам:")
+            for media_type in sorted(
+                set(comparison_formats.get("period1", {}))
+                | set(comparison_formats.get("period2", {}))
+            ):
+                left = comparison_formats.get("period1", {}).get(media_type, {})
+                right = comparison_formats.get("period2", {}).get(media_type, {})
+                lines.append(
+                    f"  {media_type}: P1 ER {left.get('engagement_rate', 0)}%, "
+                    f"P2 ER {right.get('engagement_rate', 0)}%, "
+                    f"средний охват {left.get('reach_avg', 0)} → {right.get('reach_avg', 0)}"
+                )
+        comparison_top = context.get("comparison_top_posts", {})
+        if comparison_top:
+            lines.append("\nЛучшие публикации по периодам:")
+            for label, key in (("P1", "period1"), ("P2", "period2")):
+                best = (comparison_top.get(key) or [{}])[0]
+                lines.append(
+                    f"  {label}: {best.get('media_type', '—')}, "
+                    f"{best.get('value', 0)} взаимодействий, \"{best.get('caption', 'нет данных')}\""
+                )
     else:
         # Regular report
         stats = context.get("stats", {})
@@ -117,6 +140,32 @@ def format_context_for_ai(context: dict) -> str:
         best = context.get("best_post", "")
         if best and best != "нет данных":
             lines.append(f"\nЛучший пост:\n{best}")
+
+    top_posts = context.get("top_posts", [])
+    if top_posts:
+        lines.append("\nТоп публикаций по взаимодействиям:")
+        for post in top_posts[:3]:
+            lines.append(
+                f"  {post['media_type']}: {post['value']} взаимодействий, "
+                f"охват {post['reach']}, \"{post['caption']}\""
+            )
+
+    formats = context.get("format_performance", {})
+    if formats:
+        lines.append("\nФорматы:")
+        for media_type, values in formats.items():
+            lines.append(
+                f"  {media_type}: {values['posts']} публикаций, "
+                f"средний охват {values['reach_avg']}, ER {values['engagement_rate']}%"
+            )
+
+    quality = context.get("data_quality")
+    if quality:
+        lines.append(
+            f"\nКачество данных: доступно {quality['available_days']} дн. "
+            f"из {quality.get('expected_days', 'н/д')}, "
+            f"частично загружено {quality['partial_days']} дн."
+        )
 
     # Keep repeated dialogue requests fast and leave the model room to answer.
     return truncate_text("\n".join(lines), 14000)

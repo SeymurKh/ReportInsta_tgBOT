@@ -186,14 +186,19 @@ async def ai_dialogue_handler(message: Message, state: FSMContext):
         await message.answer(AI_UNAVAILABLE_TEXT)
         return
 
+    question = (message.text or "").strip()
+    if not question:
+        await message.answer("Напишите вопрос текстом.", parse_mode=None)
+        return
+
     history = list(data.get("dialogue_history", []))
     context_str = format_context_for_ai(context)
 
     loading_msg = await message.answer("🤔 Думаю...")
     try:
-        answer = await analyzer.chat_with_context(context_str, history, message.text)
+        answer = await analyzer.chat_with_context(context_str, history, question)
 
-        history.append({"role": "user", "content": message.text})
+        history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         # Keep the dialogue useful for follow-up questions without growing
         # the FSM payload indefinitely. The analyzer applies a second bound

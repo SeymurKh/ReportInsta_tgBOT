@@ -100,6 +100,7 @@ def generate_excel_report(
     stats_summary, content_summary, daily_stats,
     publications, ai_analysis, dialogue_history=None,
     stories_summary=None, stories_list=None, comparison_periods=None,
+    comparison_period_days=None, comparison_formats=None, comparison_top_posts=None,
 ) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -308,10 +309,63 @@ def generate_excel_report(
                     ws_cmp.cell(row=row, column=2).number_format = '0.0"%"'
                     ws_cmp.cell(row=row, column=3).number_format = '0.0"%"'
                 row += 1
+        if comparison_period_days:
+            ws_cmp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+            ws_cmp.cell(row=row, column=1, value="Средние значения за день")
+            _ss(ws_cmp.cell(row=row, column=1))
+            for col in range(1, 4):
+                ws_cmp.cell(row=row, column=col).border = THIN_BORDER
+            row += 1
+            p1_days = max(comparison_period_days.get("available1", 0), 1)
+            p2_days = max(comparison_period_days.get("available2", 0), 1)
+            for label, metric in [
+                ("Охват / день", "reach_total"),
+                ("Просмотры / день", "views_total"),
+                ("Вовлечённость / день", "accounts_engaged_total"),
+            ]:
+                ws_cmp.cell(row=row, column=1, value=label)
+                ws_cmp.cell(row=row, column=2, value=round(p1.get("stats", {}).get(metric, 0) / p1_days))
+                ws_cmp.cell(row=row, column=3, value=round(p2.get("stats", {}).get(metric, 0) / p2_days))
+                _style_body(ws_cmp, row, row, 1, 3)
+                row += 1
+        if comparison_formats:
+            ws_cmp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+            ws_cmp.cell(row=row, column=1, value="Форматы контента")
+            _ss(ws_cmp.cell(row=row, column=1))
+            row += 1
+            format1 = comparison_formats.get("period1", {})
+            format2 = comparison_formats.get("period2", {})
+            for media_type in sorted(set(format1) | set(format2)):
+                left, right = format1.get(media_type, {}), format2.get(media_type, {})
+                ws_cmp.cell(row=row, column=1, value=media_type)
+                ws_cmp.cell(row=row, column=2, value=f"{left.get('posts', 0)} постов; ER {left.get('engagement_rate', 0)}%")
+                ws_cmp.cell(row=row, column=3, value=f"{right.get('posts', 0)} постов; ER {right.get('engagement_rate', 0)}%")
+                _style_body(ws_cmp, row, row, 1, 3)
+                row += 1
+        if comparison_top_posts:
+            ws_cmp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+            ws_cmp.cell(row=row, column=1, value="Лучшие публикации")
+            _ss(ws_cmp.cell(row=row, column=1))
+            row += 1
+            for label, key in (("Период 1", "period1"), ("Период 2", "period2")):
+                best = (comparison_top_posts.get(key) or [{}])[0]
+                ws_cmp.cell(row=row, column=1, value=label)
+                ws_cmp.cell(row=row, column=2, value=best.get("caption", "Нет данных"))
+                ws_cmp.cell(row=row, column=3, value=best.get("value", 0))
+                _style_body(ws_cmp, row, row, 1, 3)
+                row += 1
         ws_cmp.column_dimensions["A"].width = 30
         ws_cmp.column_dimensions["B"].width = 18
         ws_cmp.column_dimensions["C"].width = 18
         ws_cmp.freeze_panes = "A5"
+
+    if comparison_periods:
+        # Regular-report sheets would contain period-1 fallbacks and be misleading
+        # in a comparison workbook. Keep only the comparison and optional dialogue.
+        for sheet in list(wb.worksheets):
+            if sheet is ws_cmp or (dialogue_history and "AI" in sheet.title):
+                continue
+            del wb[sheet.title]
 
     buf = io.BytesIO()
     wb.save(buf)

@@ -3,9 +3,10 @@ from typing import Optional
 import logging
 
 from sqlalchemy import select, update, and_, text
+from sqlalchemy.exc import IntegrityError
 
 from database.engine import async_session_factory
-from database.models import Account, DailyStats, Post, Story
+from database.models import Account, DailyStats, Post, Story, NotificationDelivery, SyncRun, SyncLease
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,143 @@ async def update_account_token(instagram_user_id: str, new_token: str) -> None:
         await session.commit()
 
 
+async def update_account_sync_status(
+    account_id: int,
+    status: str,
+    error: str | None = None,
+) -> None:
+    """Persist the latest background/on-demand synchronization state."""
+    values = {
+        "sync_status": status,
+        "last_sync_error": error[:1000] if error else None,
+    }
+    if status == "success":
+        values["last_sync_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Account).where(Account.id == account_id).values(**values)
+        )
+        await session.commit()
+
+
+async def start_sync_run(account_id: int, since_date: date, until_date: date,
+                         sync_type: str = "full") -> int:
+    async with async_session_factory() as session:
+        run = SyncRun(
+            account_id=account_id,
+            sync_type=sync_type,
+            since_date=since_date,
+            until_date=until_date,
+            status="running",
+        )
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+        return run.id
+
+
+async def finish_sync_run(
+    run_id: int,
+    status: str,
+    error: str | None = None,
+    api_delay_days: int = 0,
+    is_partial: bool = False,
+) -> None:
+    async with async_session_factory() as session:
+        await session.execute(
+            update(SyncRun)
+            .where(SyncRun.id == run_id)
+            .values(
+                status=status,
+                finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                error=error[:2000] if error else None,
+                api_delay_days=api_delay_days,
+                is_partial=is_partial,
+            )
+        )
+        await session.commit()
+
+
+async def acquire_sync_lease(
+    account_id: int,
+    owner: str,
+    ttl_seconds: int = 7200,
+    sync_type: str = "full",
+) -> bool:
+    """Acquire a DB-backed lease, reclaiming only expired leases."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    expires_at = now + timedelta(seconds=ttl_seconds)
+    async with async_session_factory() as session:
+        session.add(SyncLease(
+            account_id=account_id,
+            sync_type=sync_type,
+            owner=owner,
+            acquired_at=now,
+            expires_at=expires_at,
+        ))
+        try:
+            await session.commit()
+            return True
+        except IntegrityError:
+            await session.rollback()
+
+        result = await session.execute(
+            update(SyncLease)
+            .where(
+                SyncLease.account_id == account_id,
+                SyncLease.sync_type == sync_type,
+                SyncLease.expires_at <= now,
+            )
+            .values(owner=owner, acquired_at=now, expires_at=expires_at)
+        )
+        await session.commit()
+        return result.rowcount == 1
+
+
+async def release_sync_lease(account_id: int, owner: str, sync_type: str = "full") -> None:
+    async with async_session_factory() as session:
+        await session.execute(
+            text(
+                "DELETE FROM sync_leases "
+                "WHERE account_id = :account_id AND sync_type = :sync_type AND owner = :owner"
+            ),
+            {"account_id": account_id, "sync_type": sync_type, "owner": owner},
+        )
+        await session.commit()
+
+
+async def claim_notification_delivery(
+    delivery_key: str,
+    notification_type: str,
+    recipient_id: int | str,
+) -> bool:
+    """Atomically claim a scheduled notification key.
+
+    A unique constraint makes this safe when two scheduler instances race.
+    """
+    async with async_session_factory() as session:
+        session.add(NotificationDelivery(
+            delivery_key=delivery_key,
+            notification_type=notification_type,
+            recipient_id=str(recipient_id),
+        ))
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return False
+        return True
+
+
+async def release_notification_delivery(delivery_key: str) -> None:
+    async with async_session_factory() as session:
+        await session.execute(
+            text("DELETE FROM notification_deliveries WHERE delivery_key = :key"),
+            {"key": delivery_key},
+        )
+        await session.commit()
+
+
 # ────────────────────── Daily Stats ──────────────────────
 
 
@@ -89,6 +227,8 @@ async def save_daily_stats(
     follower_count: int | None,
     views: int | None = None,
     accounts_engaged: int | None = None,
+    collected_at: datetime | None = None,
+    is_partial: bool | None = None,
 ) -> None:
     async with async_session_factory() as session:
         existing = await session.execute(
@@ -107,6 +247,8 @@ async def save_daily_stats(
                 "follower_count": follower_count,
                 "views": views,
                 "accounts_engaged": accounts_engaged,
+                "collected_at": collected_at,
+                "is_partial": is_partial,
             }.items():
                 if value is not None:
                     setattr(row, field, value)
@@ -117,6 +259,8 @@ async def save_daily_stats(
                 media_count=media_count or 0, reach=reach or 0,
                 follower_count=follower_count or 0,
                 views=views or 0, accounts_engaged=accounts_engaged or 0,
+                collected_at=collected_at,
+                is_partial=bool(is_partial),
             ))
 
         await session.commit()
@@ -433,6 +577,9 @@ async def get_all_daily_stats_dates(account_id: int) -> list[DailyStats]:
 async def clear_all_data() -> None:
     """Delete all data from all tables. Used for reset."""
     async with async_session_factory() as session:
+        await session.execute(text("DELETE FROM sync_leases"))
+        await session.execute(text("DELETE FROM sync_runs"))
+        await session.execute(text("DELETE FROM notification_deliveries"))
         await session.execute(text("DELETE FROM stories"))
         await session.execute(text("DELETE FROM posts"))
         await session.execute(text("DELETE FROM daily_stats"))

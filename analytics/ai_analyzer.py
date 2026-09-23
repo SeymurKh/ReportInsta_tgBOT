@@ -13,6 +13,11 @@ REPORT_SYSTEM_PROMPT = (
     "Не выдумывай причины, значения и тренды; если данных недостаточно, прямо скажи об этом. "
     "Пиши конкретно, без вступления, повторов и общих фраз."
 )
+REPORT_SYSTEM_PROMPT += (
+    " Никогда не подменяй отсутствие метрики нулём. Разделяй факт из данных, "
+    "гипотезу и рекомендацию. Не утверждай причинность, если в контексте нет "
+    "данных для её доказательства."
+)
 
 CHAT_SYSTEM_PROMPT = (
     "Ты помощник по SMM-аналитике. Отвечай на русском, кратко и по существу. "
@@ -21,10 +26,16 @@ CHAT_SYSTEM_PROMPT = (
     "Обычно отвечай в 3–6 коротких строк; если вопрос требует сравнения, используй компактные пункты. "
     "Не пересказывай весь отчёт и не повторяй уже сказанное без необходимости."
 )
+CHAT_SYSTEM_PROMPT += (
+    " Сначала ответь прямо на вопрос, затем приведи максимум 2 цифры из "
+    "контекста и один практический вывод. Не пересказывай контекст целиком. "
+    "Если вопрос требует данных, которых нет, так и напиши."
+)
 
 MAX_CONTEXT_CHARS = 14000
 MAX_HISTORY_MESSAGES = 12
 MAX_HISTORY_MESSAGE_CHARS = 1200
+MAX_CHAT_RESPONSE_CHARS = 3500
 
 
 def _compact_history(history: list) -> list[dict]:
@@ -88,6 +99,11 @@ class AIAnalyzer:
 - что улучшилось и что ухудшилось;
 - 1–2 приоритетных действия на основе динамики.
 Не пересказывай таблицу и не выдумывай причины, которых нет в данных."""
+        prompt += (
+            "\nПравила сравнения: используй средние за день при разной длине периодов; "
+            "связывай рекомендацию с форматом или конкретной публикацией только если "
+            "это подтверждено переданными данными; максимум 5 коротких пунктов."
+        )
         return await self._call_openai(prompt, max_tokens=550)
 
     async def generate_recommendations(
@@ -125,7 +141,11 @@ class AIAnalyzer:
                     response.choices[0].finish_reason,
                     response.usage,
                 )
-            return content.strip() or "AI не вернул текстовый ответ. Попробуйте задать вопрос ещё раз."
+            content = content.strip()
+            if len(content) > MAX_CHAT_RESPONSE_CHARS:
+                logger.warning("OpenAI chat response truncated from %d chars", len(content))
+                content = content[:MAX_CHAT_RESPONSE_CHARS].rstrip() + "…"
+            return content or "AI не вернул текстовый ответ. Попробуйте задать вопрос ещё раз."
         except Exception as error:
             logger.error("OpenAI chat error: %s", error, exc_info=True)
             return "⚠️ Не удалось получить ответ AI. Попробуйте повторить вопрос позже."

@@ -33,6 +33,16 @@ def _apply_lightweight_migrations(sync_conn) -> None:
     migrations = {
         ("posts", "insights_updated_at"):
             f"ALTER TABLE posts ADD COLUMN insights_updated_at {timestamp_type}",
+        ("accounts", "sync_status"):
+            "ALTER TABLE accounts ADD COLUMN sync_status VARCHAR(32) DEFAULT 'never'",
+        ("accounts", "last_sync_at"):
+            f"ALTER TABLE accounts ADD COLUMN last_sync_at {timestamp_type}",
+        ("accounts", "last_sync_error"):
+            "ALTER TABLE accounts ADD COLUMN last_sync_error TEXT",
+        ("daily_stats", "collected_at"):
+            f"ALTER TABLE daily_stats ADD COLUMN collected_at {timestamp_type}",
+        ("daily_stats", "is_partial"):
+            "ALTER TABLE daily_stats ADD COLUMN is_partial BOOLEAN DEFAULT FALSE",
     }
     for (table, column), ddl in migrations.items():
         if (table, column) not in existing_columns:

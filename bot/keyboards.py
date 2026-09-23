@@ -2,6 +2,8 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
+import calendar as calendar_lib
+from datetime import date
 
 
 def main_menu_kb() -> ReplyKeyboardMarkup:
@@ -53,6 +55,64 @@ def comparison_period_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="◀️ Назад", callback_data="back")],
         ]
     )
+
+
+def comparison_calendar_kb(year: int, month: int, stage: int, today: date) -> InlineKeyboardMarkup:
+    """Calendar for selecting four comparison boundary dates sequentially."""
+    buttons = [[
+        InlineKeyboardButton(text=label, callback_data="cmpcal_noop")
+        for label in ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    ]]
+    for week in calendar_lib.monthcalendar(year, month):
+        row = []
+        for day in week:
+            if not day:
+                row.append(InlineKeyboardButton(text=" ", callback_data="cmpcal_noop"))
+                continue
+            value = date(year, month, day)
+            if value > today:
+                row.append(InlineKeyboardButton(text="·", callback_data="cmpcal_noop"))
+            else:
+                row.append(InlineKeyboardButton(
+                    text=str(day), callback_data=f"cmpcal_day_{stage}_{year}_{month}_{day}"
+                ))
+        buttons.append(row)
+    buttons.append([
+        InlineKeyboardButton(text="‹", callback_data=f"cmpcal_nav_{stage}_{year}_{month}_-1"),
+        InlineKeyboardButton(text=f"{month:02d}.{year}", callback_data="cmpcal_noop"),
+        InlineKeyboardButton(text="›", callback_data=f"cmpcal_nav_{stage}_{year}_{month}_1"),
+    ])
+    buttons.append([InlineKeyboardButton(text="Отмена", callback_data="back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def report_calendar_kb(year: int, month: int, stage: int, today: date) -> InlineKeyboardMarkup:
+    """Calendar for selecting report start and end dates."""
+    buttons = [[
+        InlineKeyboardButton(text=label, callback_data="repcal_noop")
+        for label in ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    ]]
+    for week in calendar_lib.monthcalendar(year, month):
+        row = []
+        for day in week:
+            if not day:
+                row.append(InlineKeyboardButton(text=" ", callback_data="repcal_noop"))
+                continue
+            value = date(year, month, day)
+            if value > today:
+                row.append(InlineKeyboardButton(text="·", callback_data="repcal_noop"))
+            else:
+                row.append(InlineKeyboardButton(
+                    text=str(day), callback_data=f"repcal_day_{stage}_{year}_{month}_{day}"
+                ))
+        buttons.append(row)
+    buttons.append([
+        InlineKeyboardButton(text="‹", callback_data=f"repcal_nav_{stage}_{year}_{month}_-1"),
+        InlineKeyboardButton(text=f"{month:02d}.{year}", callback_data="repcal_noop"),
+        InlineKeyboardButton(text="›", callback_data=f"repcal_nav_{stage}_{year}_{month}_1"),
+    ])
+    buttons.append([InlineKeyboardButton(text="Отмена", callback_data="back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def ai_period_kb() -> InlineKeyboardMarkup:

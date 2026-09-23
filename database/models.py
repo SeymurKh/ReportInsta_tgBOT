@@ -19,6 +19,9 @@ class Account(Base):
     name = Column(String(256), default="")
     access_token = Column(String(512), nullable=False)
     is_active = Column(Boolean, default=True)
+    sync_status = Column(String(32), default="never", nullable=False)
+    last_sync_at = Column(DateTime, nullable=True)
+    last_sync_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -42,6 +45,8 @@ class DailyStats(Base):
     follower_count = Column(Integer, default=0)  # daily follower change
     views = Column(Integer, default=0)  # total views (reels, posts, stories)
     accounts_engaged = Column(Integer, default=0)  # unique accounts interacted
+    collected_at = Column(DateTime, nullable=True)  # naive UTC
+    is_partial = Column(Boolean, default=False, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("account_id", "date", name="uq_account_date"),
@@ -118,3 +123,50 @@ class Story(Base):
     insights_updated_at = Column(DateTime, nullable=True)
 
     account = relationship("Account", back_populates="stories")
+
+
+class NotificationDelivery(Base):
+    """Idempotency record for scheduled Telegram notifications."""
+
+    __tablename__ = "notification_deliveries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    delivery_key = Column(String(255), unique=True, nullable=False)
+    notification_type = Column(String(64), nullable=False)
+    recipient_id = Column(String(64), nullable=False)
+    sent_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class SyncRun(Base):
+    """Durable journal of account synchronization attempts."""
+
+    __tablename__ = "sync_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    sync_type = Column(String(32), nullable=False, default="full")
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    status = Column(String(32), nullable=False, default="running")
+    error = Column(Text, nullable=True)
+    since_date = Column(Date, nullable=True)
+    until_date = Column(Date, nullable=True)
+    api_delay_days = Column(Integer, default=0, nullable=False)
+    is_partial = Column(Boolean, default=False, nullable=False)
+
+
+class SyncLease(Base):
+    """Short-lived cross-process lock for one account sync job."""
+
+    __tablename__ = "sync_leases"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    sync_type = Column(String(32), nullable=False, default="full")
+    owner = Column(String(128), nullable=False)
+    acquired_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "sync_type", name="uq_sync_lease_account_type"),
+    )

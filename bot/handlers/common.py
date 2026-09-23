@@ -7,9 +7,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 
 from database import crud
-from bot.keyboards import (
-    main_menu_kb, accounts_kb, period_kb, comparison_period_kb,
-)
+from bot.keyboards import main_menu_kb, accounts_kb, comparison_period_kb, report_calendar_kb
+from bot.states import ReportForm
+from datetime import datetime, timezone
 from bot.helpers import send_excel
 from utils.formatters import format_number
 
@@ -39,6 +39,11 @@ async def cmd_status(message: Message):
         latest = await crud.get_latest_stats(acc.id)
         last_date = latest.date.strftime("%d.%m.%Y") if latest else "нет данных"
         lines.append(f"• @{acc.username} — последние данные: {last_date}")
+    for acc in accounts:
+        sync_status = getattr(acc, "sync_status", "unknown") or "unknown"
+        sync_at = getattr(acc, "last_sync_at", None)
+        sync_time = sync_at.strftime("%d.%m %H:%M UTC") if sync_at else "—"
+        lines.append(f"  sync @{acc.username}: {sync_status}, {sync_time}")
     await message.answer("\n".join(lines), parse_mode=None)
 
 
@@ -107,7 +112,15 @@ async def account_callback(callback: CallbackQuery, state: FSMContext):
     if flow == "comparison":
         await callback.message.edit_text("📅 Выберите первый период:", reply_markup=comparison_period_kb())
     else:
-        await callback.message.edit_text("📅 Выберите период:", reply_markup=period_kb())
+        today = datetime.now(timezone.utc).date()
+        await state.set_state(ReportForm.waiting_custom_dates)
+        await state.update_data(report_calendar_stage=1)
+        await callback.message.edit_text(
+            "Выберите начало периода отчёта:",
+            reply_markup=report_calendar_kb(today.year, today.month, 1, today),
+        )
+        await callback.answer()
+        return
     await callback.answer()
 
 
