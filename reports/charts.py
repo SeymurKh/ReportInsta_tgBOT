@@ -68,8 +68,43 @@ def create_content_comparison_chart(posts_data: list[dict]) -> bytes:
     return _to_bytes(fig)
 
 
+def create_stories_chart(dates: list, views: list) -> bytes:
+    fig, ax = plt.subplots()
+    ax.bar(dates, views, color="#9C27B0", alpha=0.8)
+    if views:
+        avg_val = sum(views) / len(views)
+        ax.axhline(y=avg_val, color="red", linestyle="--", alpha=0.7, label=f"Среднее: {avg_val:.0f}")
+        ax.legend()
+    ax.set_title("Просмотры сторис по дням", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Просмотры")
+    fig.autofmt_xdate()
+    return _to_bytes(fig)
+
+
+def create_comparison_chart(labels: list[str], p1_values: list, p2_values: list,
+                            p1_name: str, p2_name: str) -> bytes:
+    """Grouped bar chart comparing two periods by several metrics."""
+    import numpy as np
+    fig, ax = plt.subplots()
+    x = np.arange(len(labels))
+    width = 0.35
+    ax.bar(x - width / 2, p1_values, width, label=p1_name, color=settings.CHART_COLORS[0], alpha=0.85)
+    ax.bar(x + width / 2, p2_values, width, label=p2_name, color=settings.CHART_COLORS[1], alpha=0.85)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=10)
+    ax.set_title("Сравнение периодов", fontsize=14, fontweight="bold")
+    ax.legend()
+    fig.tight_layout()
+    return _to_bytes(fig)
+
+
 def create_accounts_comparison_chart(accounts_data: list[dict]) -> bytes:
     fig, ax = plt.subplots()
+    if not accounts_data:
+        ax.set_title("Ð¡Ñ€Ð°Ð²Ð½ÐµÐ½Ð¸Ðµ Ð°ÐºÐºÐ°ÑƒÐ½Ñ‚Ð¾Ð²", fontsize=14, fontweight="bold")
+        ax.text(0.5, 0.5, "ÐÐµÑ‚ Ð´Ð°Ð½Ð½Ñ‹Ñ…", ha="center", va="center")
+        ax.set_axis_off()
+        return _to_bytes(fig)
     names = [a["name"][:15] for a in accounts_data]
     followers = [a["followers"] for a in accounts_data]
     y_pos = range(len(names))

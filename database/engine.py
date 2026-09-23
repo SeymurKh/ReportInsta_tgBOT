@@ -15,3 +15,25 @@ async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_o
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_apply_lightweight_migrations)
+
+
+def _apply_lightweight_migrations(sync_conn) -> None:
+    """Add columns introduced after the initial schema (create_all does not
+    alter existing tables). SQLite/Postgres-compatible via plain ALTER TABLE."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    existing_columns = {
+        (table, col["name"])
+        for table in inspector.get_table_names()
+        for col in inspector.get_columns(table)
+    }
+    timestamp_type = "TIMESTAMP" if sync_conn.dialect.name == "postgresql" else "DATETIME"
+    migrations = {
+        ("posts", "insights_updated_at"):
+            f"ALTER TABLE posts ADD COLUMN insights_updated_at {timestamp_type}",
+    }
+    for (table, column), ddl in migrations.items():
+        if (table, column) not in existing_columns:
+            sync_conn.execute(text(ddl))

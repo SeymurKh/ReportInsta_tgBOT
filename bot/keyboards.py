@@ -61,7 +61,7 @@ def ai_period_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📅 Неделя", callback_data="ai_period_week")],
             [InlineKeyboardButton(text="📅 Месяц", callback_data="ai_period_month")],
             [InlineKeyboardButton(text="📅 Произвольный", callback_data="ai_period_custom")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="back")],
         ]
     )
 

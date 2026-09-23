@@ -3,138 +3,278 @@ from datetime import date, datetime, timedelta, timezone
 
 from config import settings
 from database import crud
-from instagram.client import InstagramClient
+from instagram.client import InstagramClient, utc_now_naive
+from services.data_sync import sync_account_data
 from analytics.calculations import (
-    calculate_period_summary, calculate_content_summary,
-    get_best_post, detect_trend,
+    calculate_period_summary, calculate_content_summary, calculate_stories_summary,
+    get_best_post, get_best_story, detect_trend,
 )
-from analytics.ai_analyzer import AIAnalyzer
+from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from reports.charts import (
-    create_followers_chart, create_metrics_chart, create_engagement_chart,
+    create_followers_chart, create_metrics_chart,
+    create_stories_chart, create_comparison_chart,
 )
-from utils.formatters import format_number, format_pct, format_date, format_period, format_growth, MONTHS_RU
+from utils.formatters import format_number, format_pct, format_period, format_growth, MONTHS_RU
 
 logger = logging.getLogger(__name__)
-ai = AIAnalyzer()
+
+TYPE_EMOJI = {"IMAGE": "📷", "VIDEO": "🎬", "CAROUSEL_ALBUM": "📸", "REELS": "🎬"}
+TYPE_NAME = {"IMAGE": "Фото", "VIDEO": "Видео", "CAROUSEL_ALBUM": "Карусель", "REELS": "Reels"}
+WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 
-async def _fix_followers_field(account_id: int, date_from: date, date_to: date, current_followers: int):
-    """Recalculate followers field for each day by working backwards from the known current total."""
-    stats_list = await crud.get_daily_stats(account_id, date_from, date_to)
-    if not stats_list or not current_followers:
+def _to_unix(dt: datetime) -> int:
+    """Naive UTC datetime -> unix timestamp."""
+    return int(dt.replace(tzinfo=timezone.utc).timestamp())
+
+
+def _day_end(d: date) -> datetime:
+    return datetime(d.year, d.month, d.day, 23, 59, 59)
+
+
+def resolve_period(period: str = "week",
+                   custom_date_from: date = None,
+                   custom_date_to: date = None) -> tuple[date, date]:
+    today = date.today()
+    if custom_date_from and custom_date_to:
+        if custom_date_from > custom_date_to:
+            raise ValueError("custom period start is after its end")
+        if custom_date_to > today:
+            raise ValueError("future report dates are not supported")
+        return custom_date_from, custom_date_to
+    days = settings.PERIODS.get(period, 7)
+    return today - timedelta(days=days), today - timedelta(days=1)
+
+
+async def _fix_followers_field(account_id: int, current_followers: int) -> None:
+    """Recalculate the followers field for ALL stored days, working backwards
+    from the known current total. Single bulk transaction."""
+    if not current_followers:
+        return
+    stats_list = await crud.get_all_daily_stats_dates(account_id)
+    if not stats_list:
         return
 
-    stats_list.sort(key=lambda s: s.date)
-
-    for i in range(len(stats_list) - 1, -1, -1):
-        if i == len(stats_list) - 1:
-            followers_val = current_followers
+    mapping: dict[date, int] = {}
+    prev_row = None
+    for row in reversed(stats_list):
+        if prev_row is None:
+            total = current_followers
         else:
-            followers_val = stats_list[i + 1].followers - stats_list[i + 1].follower_count
-        await crud.update_followers_field(account_id, stats_list[i].date, followers_val)
+            # end_of_day(i) = end_of_day(i+1) - net_change(i+1)
+            total = mapping[prev_row.date] - prev_row.follower_count
+        mapping[row.date] = max(total, 0)
+        prev_row = row
+
+    await crud.bulk_update_followers(account_id, mapping)
 
 
-async def _fetch_and_save_data(account, since_dt: datetime, until_dt: datetime) -> list[str]:
-    """Always fetch fresh data from Instagram API and save to DB.
-    Returns list of dates (dd.mm) with missing data due to Instagram API delay.
+async def _legacy_fetch_and_save_data(account, since_dt: datetime, until_dt: datetime) -> dict:
+    """Fetch fresh data from Instagram API where needed and save to DB.
+
+    Uses the DB cache for days older than CACHE_FRESHNESS_HOURS.
+    Returns {"api_delay_dates": [...], "partial": bool}.
+    All datetimes are naive UTC.
     """
-    logger.info(f"Fetching fresh data for @{account.username} ({since_dt.date()} — {until_dt.date()})")
+    logger.info(f"Fetching data for @{account.username} ({since_dt.date()} — {until_dt.date()})")
 
-    since_unix = int(since_dt.timestamp())
-    until_unix = int(until_dt.timestamp())
+    now = utc_now_naive()
+    freshness_cutoff = now - timedelta(hours=settings.CACHE_FRESHNESS_HOURS)
 
-    client = InstagramClient(account.instagram_user_id, account.access_token)
-    user_info = {}
-    try:
-        # 1. Fetch daily insights
-        snapshot = await client.collect_full_snapshot(since_unix, until_unix)
-        user_info = snapshot["user_info"]
+    all_days = [since_dt.date() + timedelta(days=i)
+                for i in range((until_dt.date() - since_dt.date()).days + 1)]
+    saved = await crud.get_daily_stats(account.id, since_dt.date(), until_dt.date())
+    saved_dates = {s.date for s in saved}
 
-        for day_str, metrics in snapshot["insights"].items():
-            day_date = date.fromisoformat(day_str)
-            await crud.save_daily_stats(
-                account_id=account.id,
-                stats_date=day_date,
-                followers=0,  # recalculated below
-                following=user_info.get("follows_count", 0),
-                media_count=user_info.get("media_count", 0),
-                reach=metrics.get("reach", 0),
-                follower_count=metrics.get("follower_count", 0),
-                views=metrics.get("views", 0),
-                accounts_engaged=metrics.get("accounts_engaged", 0),
-            )
+    # Days that are missing or still "fresh" (IG data can change within 48h)
+    days_to_fetch = {d for d in all_days
+                     if d not in saved_dates or _day_end(d) >= freshness_cutoff}
 
-        # 2. Fetch posts with insights
-        posts_data = await client.collect_posts_with_insights(since_dt, until_dt)
-        for p in posts_data:
-            p["account_id"] = account.id
-        await crud.save_posts(posts_data)
+    # Posts: refresh if the period is recent or there is nothing cached yet
+    posts_cached = await crud.get_posts(account.id, since_dt, until_dt)
+    refresh_posts = until_dt >= freshness_cutoff or not posts_cached
 
-        # 3. Clean up posts that were deleted from Instagram
-        fetched_ids = {p["instagram_media_id"] for p in posts_data}
-        await crud.delete_stale_posts(account.id, since_dt, until_dt, fetched_ids)
+    partial = False
+    user_info: dict = {}
 
-    finally:
-        await client.close()
+    if days_to_fetch or refresh_posts:
+        client = InstagramClient(account.instagram_user_id, account.access_token)
+        try:
+            if days_to_fetch:
+                snapshot = await client.collect_full_snapshot(
+                    _to_unix(since_dt), _to_unix(until_dt), days_to_fetch
+                )
+                user_info = snapshot["user_info"]
+                for day_str, metrics in snapshot["insights"].items():
+                    day_date = date.fromisoformat(day_str)
+                    if day_date not in days_to_fetch:
+                        continue  # don't overwrite cached stable days
+                    await crud.save_daily_stats(
+                        account_id=account.id,
+                        stats_date=day_date,
+                        followers=0,  # recalculated below
+                        following=user_info.get("follows_count", 0),
+                        media_count=user_info.get("media_count", 0),
+                        reach=metrics.get("reach", 0),
+                        follower_count=metrics.get("follower_count", 0),
+                        views=metrics.get("views", 0),
+                        accounts_engaged=metrics.get("accounts_engaged", 0),
+                    )
+            else:
+                try:
+                    user_info = await client.get_user_info()
+                except Exception as e:
+                    logger.warning(f"user_info fetch failed for @{account.username}: {e}")
 
-    # 4. Fix followers field (calculate backwards from current total)
-    current_followers = user_info.get("followers_count", 0)
-    await _fix_followers_field(account.id, since_dt.date(), until_dt.date(), current_followers)
+            if refresh_posts:
+                posts_data, posts_partial = await client.collect_posts_with_insights(since_dt, until_dt)
+                partial = partial or posts_partial
+                for p in posts_data:
+                    p["account_id"] = account.id
+                await crud.save_posts(posts_data)
+                # Clean up posts deleted from Instagram — only when the fetch
+                # was complete, otherwise we'd delete legit posts
+                if not posts_partial:
+                    fetched_ids = {p["instagram_media_id"] for p in posts_data}
+                    await crud.delete_stale_posts(account.id, since_dt, until_dt, fetched_ids)
+        finally:
+            await client.close()
 
-    # 5. Check for missing days (Instagram API delay ~24-48h)
-    expected_days = (until_dt.date() - since_dt.date()).days + 1
-    all_dates = [since_dt.date() + timedelta(days=i) for i in range(expected_days)]
+    # Anchor the followers history at the current total (full history recalc)
+    if user_info.get("followers_count"):
+        await _fix_followers_field(account.id, user_info["followers_count"])
+
+    # Missing days: within 48h = expected IG API delay, older = bug
     saved_stats = await crud.get_daily_stats(account.id, since_dt.date(), until_dt.date())
     saved_dates = {s.date for s in saved_stats}
-    missing = [d for d in all_dates if d not in saved_dates]
+    missing = [d for d in all_days if d not in saved_dates]
 
-    if not missing:
-        return []
-
-    # Classify: within 48h = API delay (expected), outside = bug
-    now = datetime.now(timezone.utc)
     api_delay_dates = []
-    bug_dates = []
     for d in missing:
-        day_end = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=timezone.utc)
-        hours_since = (now - day_end).total_seconds() / 3600
+        hours_since = (now - _day_end(d)).total_seconds() / 3600
         if hours_since <= 48:
             api_delay_dates.append(d)
         else:
-            bug_dates.append(d)
+            logger.error(f"BUG: Data missing outside API delay window: {d} (@{account.username})")
 
-    if bug_dates:
-        logger.error(f"BUG: Data missing outside API delay window: {bug_dates}")
+    return {
+        "api_delay_dates": [d.strftime("%d.%m") for d in api_delay_dates],
+        "partial": partial,
+    }
+
+
+async def _fetch_and_save_data(account, since_dt: datetime, until_dt: datetime) -> dict:
+    """Fetch data through the shared synchronization service.
+
+    Kept as a small compatibility wrapper for the report generator while all
+    sync policy lives in services.data_sync.
+    """
+    return await sync_account_data(account, since_dt, until_dt)
+
+
+async def _refresh_stories_if_recent(account, until_dt: datetime) -> None:
+    """Collect fresh stories when the report period overlaps the story
+    insights window. TokenExpiredError propagates to the caller."""
+    from instagram.client import TokenExpiredError
+    from services.stories_collector import collect_stories_for_account
+    cutoff = utc_now_naive() - timedelta(hours=settings.STORIES_INSIGHTS_WINDOW_HOURS)
+    if until_dt < cutoff:
+        return
+    try:
+        await collect_stories_for_account(account)
+    except TokenExpiredError:
+        raise
+    except Exception as e:
+        logger.warning(f"Stories refresh failed for @{account.username}: {e}")
+
+
+def _warnings_block(api_delay_dates: list[str], partial: bool) -> str:
+    parts = []
     if api_delay_dates:
-        logger.info(f"Data missing due to Instagram API delay (< 48h): {api_delay_dates}")
+        parts.append(f"⚠️ Данные за {', '.join(api_delay_dates)} могут быть неполными (задержка Instagram API ~24-48ч)")
+    if partial:
+        parts.append("⚠️ Часть данных не удалось получить из Instagram API — отчёт может быть неполным")
+    return ("\n\n" + "\n".join(parts)) if parts else ""
 
-    return [d.strftime("%d.%m") for d in api_delay_dates]
+# ────────────────────── Stories helpers ──────────────────────
 
+def _stories_to_dicts(stories_list: list) -> list[dict]:
+    return [{
+        "date": s.timestamp.strftime("%d.%m %H:%M"),
+        "media_type": s.media_type,
+        "permalink": s.permalink,
+        "views": s.views,
+        "reach": s.reach,
+        "replies": s.replies,
+        "shares": s.shares,
+        "total_interactions": s.total_interactions,
+        "profile_activity": s.profile_activity,
+        "follows": s.follows,
+        "tap_forward": s.tap_forward,
+        "tap_back": s.tap_back,
+        "tap_exit": s.tap_exit,
+        "swipe_forward": s.swipe_forward,
+        "is_active": s.is_active,
+    } for s in stories_list]
+
+
+def _stories_section_text(stories_summary: dict, stories_list: list) -> str:
+    if not stories_summary.get("total_stories"):
+        return (
+            "📲 Сторис\n"
+            "За период сторис не найдены. Если сторис были — сбор данных "
+            "начался недавно: историю сторис Instagram API не отдаёт, "
+            "бот собирает их каждые несколько часов с момента запуска."
+        )
+    lines = [
+        f"📲 Сторис ({stories_summary['total_stories']})",
+        f"Просмотры: {format_number(stories_summary['total_views'])} (ср. {format_number(stories_summary['avg_views'])}/сторис)",
+        f"Охват: {format_number(stories_summary['total_reach'])} | Ответы: {format_number(stories_summary['total_replies'])} | Репосты: {format_number(stories_summary['total_shares'])}",
+        f"Переходы в профиль: {format_number(stories_summary['total_profile_activity'])} | Подписки: {format_number(stories_summary['total_follows'])}",
+        f"Выходы: {stories_summary['exit_rate']}% | Листали дальше: {format_number(stories_summary['tap_forward_total'])} | Вернулись: {format_number(stories_summary['tap_back_total'])}",
+    ]
+    best = get_best_story(stories_list)
+    if best and best.views > 0:
+        day = best.timestamp
+        lines.append(
+            f"🏆 Лучшая сторис: {day.day} {MONTHS_RU[day.month]} — "
+            f"👁 {format_number(best.views)} | Охват {format_number(best.reach)} | 💬 {best.replies}"
+        )
+    return "\n".join(lines)
+
+
+def _stories_chart(stories_list: list) -> bytes | None:
+    if not stories_list:
+        return None
+    by_day: dict[date, int] = {}
+    for s in stories_list:
+        d = s.timestamp.date()
+        by_day[d] = by_day.get(d, 0) + s.views
+    dates = sorted(by_day.keys())
+    return create_stories_chart(dates, [by_day[d] for d in dates])
+
+
+# ────────────────────── Main report ──────────────────────
 
 async def generate_report(
     account, period: str = "week",
     custom_date_from: date = None, custom_date_to: date = None
 ) -> dict:
-    today = date.today()
+    date_from, date_to = resolve_period(period, custom_date_from, custom_date_to)
 
-    if custom_date_from and custom_date_to:
-        date_from = custom_date_from
-        date_to = custom_date_to
-    else:
-        days = settings.PERIODS.get(period, 7)
-        date_from = today - timedelta(days=days)
-        date_to = today - timedelta(days=1)
+    since_dt = datetime(date_from.year, date_from.month, date_from.day)
+    until_dt = _day_end(date_to)
 
-    since_dt = datetime(date_from.year, date_from.month, date_from.day, tzinfo=timezone.utc)
-    until_dt = datetime(date_to.year, date_to.month, date_to.day, 23, 59, 59, tzinfo=timezone.utc)
-
-    api_delay_dates = await _fetch_and_save_data(account, since_dt, until_dt)
+    fetch_info = await _fetch_and_save_data(account, since_dt, until_dt)
+    await _refresh_stories_if_recent(account, until_dt)
 
     stats_list = await crud.get_daily_stats(account.id, date_from, date_to)
     posts_list = await crud.get_posts(account.id, since_dt, until_dt)
+    stories_list = await crud.get_stories(account.id, since_dt, until_dt)
 
     stats_summary = calculate_period_summary(stats_list)
     content_summary = calculate_content_summary(posts_list)
+    stories_summary = calculate_stories_summary(stories_list)
 
     best = get_best_post(posts_list)
     best_info = "нет данных"
@@ -147,44 +287,42 @@ async def generate_report(
             f"{best.permalink}"
         )
     trend = detect_trend(stats_list, "followers")
-
     period_str = format_period(date_from, date_to)
 
-    ai_analysis = await ai.analyze_account(
-        period_str, stats_summary, content_summary, best_info, trend
-    )
+    analyzer = get_analyzer()
+    if analyzer:
+        ai_analysis = await analyzer.analyze_account(
+            period_str, stats_summary, content_summary, best_info, trend,
+            stories_summary=stories_summary,
+        )
+    else:
+        ai_analysis = AI_UNAVAILABLE_TEXT
 
     trend_map = {"growing": "📈 Растущий", "declining": "📉 Снижающийся", "stable": "➡️ Стабильный"}
     views_str = format_number(stats_summary['views_total']) if stats_summary['views_total'] > 0 else "н/д"
     accounts_engaged_str = format_number(stats_summary['accounts_engaged_total']) if stats_summary['accounts_engaged_total'] > 0 else "н/д"
 
-    # Build publication calendar - group posts by date
-    type_emoji = {"IMAGE": "📷", "VIDEO": "🎬", "CAROUSEL_ALBUM": "📸", "REELS": "🎬"}
-    type_name = {"IMAGE": "Фото", "VIDEO": "Видео", "CAROUSEL_ALBUM": "Карусель", "REELS": "Reels"}
-    weekdays_ru = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-
-    posts_by_date = {}
+    # Publication calendar — group posts by date
+    posts_by_date: dict[str, list] = {}
     for p in posts_list:
-        day_key = p.timestamp.strftime("%Y-%m-%d")
-        if day_key not in posts_by_date:
-            posts_by_date[day_key] = []
-        posts_by_date[day_key].append(p)
+        posts_by_date.setdefault(p.timestamp.strftime("%Y-%m-%d"), []).append(p)
 
     calendar_lines = []
     for day_key in sorted(posts_by_date.keys()):
         day_date = date.fromisoformat(day_key)
-        weekday = weekdays_ru[day_date.weekday()]
+        weekday = WEEKDAYS_RU[day_date.weekday()]
         calendar_lines.append(f"\n📅 {day_date.day} {MONTHS_RU[day_date.month]} ({weekday}):")
         for p in posts_by_date[day_key]:
-            emoji = type_emoji.get(p.media_type, "📄")
-            mtype = type_name.get(p.media_type, p.media_type)
+            emoji = TYPE_EMOJI.get(p.media_type, "📄")
+            mtype = TYPE_NAME.get(p.media_type, p.media_type)
             caption_short = p.caption[:50].replace("\n", " ").strip()
             if len(p.caption) > 50:
                 caption_short += "..."
-            calendar_lines.append(f"  {emoji} {mtype} | \"{caption_short}\"")
+            calendar_lines.append(f'  {emoji} {mtype} | "{caption_short}"')
             calendar_lines.append(f"  ❤️ {p.likes} | 💬 {p.comments} | 💾 {p.saved} | 📤 {p.shares} | Охват {format_number(p.reach)}")
 
     publications_text = "\n".join(calendar_lines) if calendar_lines else "Нет публикаций за период"
+    stories_text = _stories_section_text(stories_summary, stories_list)
 
     report_text = f"""📱 @{account.username} — {account.name}
 📅 Период: {period_str}
@@ -192,19 +330,21 @@ async def generate_report(
 👥 Подписчики
 Текущие: {format_number(stats_summary['followers_end'])}
 Прирост: {format_growth(stats_summary['followers_growth'])} ({format_pct(stats_summary['followers_growth_pct'])})
-_Подписки − отписки (нет отдельной метрики отписок в Instagram API)_
+(Подписки − отписки; отдельной метрики отписок в Instagram API нет)
 Тренд: {trend_map.get(trend, trend)}
 
 📈 Активность
 Охват: {format_number(stats_summary['reach_total'])}
 Просмотры: {views_str}
-Аккаунтов вовлечено: {accounts_engaged_str}
+Вовлечено: {accounts_engaged_str}
 Средний охват/день: {format_number(stats_summary['reach_avg_daily'])}
 
 📹 Контент ({content_summary['total_posts']} публикаций)
 Reels: {content_summary['total_reels']} | Видео: {content_summary['total_videos']} | Фото: {content_summary['total_images']} | Карусели: {content_summary['total_carousels']}
 Средние лайки: {content_summary['avg_likes']} | Средний охват: {content_summary['avg_reach']}
 Вовлечённость (ER): {content_summary['engagement_rate']}%
+
+{stories_text}
 
 📋 Публикации
 {publications_text}
@@ -215,54 +355,51 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
 🤖 AI-анализ
 {ai_analysis}"""
 
-    # Add API delay warning if needed
-    if api_delay_dates:
-        dates_str = ", ".join(api_delay_dates)
-        report_text += f"\n\n⚠️ Данные за {dates_str} могут быть неполными (задержка Instagram API ~24-48ч)"
+    report_text += _warnings_block(fetch_info["api_delay_dates"], fetch_info["partial"])
+
 
     charts = {}
     if stats_list:
         dates = [s.date for s in stats_list]
-        # Use daily follower_count (change) instead of total followers
-        follower_growth_vals = [s.follower_count for s in stats_list]
-        reach_vals = [s.reach for s in stats_list]
+        charts["followers"] = create_followers_chart(dates, [s.follower_count for s in stats_list])
+        charts["reach"] = create_metrics_chart(dates, [s.reach for s in stats_list])
+    stories_chart = _stories_chart(stories_list)
+    if stories_chart:
+        charts["stories"] = stories_chart
 
-        charts["followers"] = create_followers_chart(dates, follower_growth_vals)
-        charts["reach"] = create_metrics_chart(dates, reach_vals)
+    # Context for AI dialogue / Excel
+    daily_stats_data = [{
+        "date": s.date.strftime("%d.%m"),
+        "reach": s.reach,
+        "followers": s.follower_count,
+        "views": s.views,
+        "accounts_engaged": s.accounts_engaged,
+    } for s in stats_list]
 
-    # Build context for AI dialogue
-    daily_stats_data = []
-    for s in stats_list:
-        daily_stats_data.append({
-            "date": s.date.strftime("%d.%m"),
-            "reach": s.reach,
-            "followers": s.follower_count,
-            "views": s.views,
-            "accounts_engaged": s.accounts_engaged,
-        })
-
-    # Build publications data for context
     publications_data = []
     for day_key in sorted(posts_by_date.keys()):
-        day_posts = []
-        for p in posts_by_date[day_key]:
-            day_posts.append({
-                "type": p.media_type,
-                "caption": p.caption[:80],
-                "likes": p.likes,
-                "comments": p.comments,
-                "saved": p.saved,
-                "shares": p.shares,
-                "reach": p.reach,
-                "views": p.views,
-            })
+        day_posts = [{
+            "type": p.media_type,
+            "caption": p.caption[:80],
+            "likes": p.likes,
+            "comments": p.comments,
+            "saved": p.saved,
+            "shares": p.shares,
+            "reach": p.reach,
+            "views": p.views,
+        } for p in posts_by_date[day_key]]
         publications_data.append({"date": day_key, "posts": day_posts})
 
     context = {
         "account": f"@{account.username} — {account.name}",
+        "account_username": account.username,
+        "account_name": account.name,
         "period": period_str,
+        "type": "report",
         "stats": stats_summary,
         "content": content_summary,
+        "stories": stories_summary,
+        "stories_list": _stories_to_dicts(stories_list),
         "best_post": best_info,
         "trend": trend,
         "daily_stats": daily_stats_data,
@@ -273,32 +410,38 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
     return {"text": report_text, "charts": charts, "context": context}
 
 
+# ────────────────────── Comparison report ──────────────────────
+
 async def generate_comparison_periods_report(
     account,
     period1_from: date, period1_to: date,
     period2_from: date, period2_to: date,
 ) -> dict:
-    """Compare two custom periods."""
-    # Ensure data for both periods
-    p1_since_dt = datetime(period1_from.year, period1_from.month, period1_from.day, tzinfo=timezone.utc)
-    p1_until_dt = datetime(period1_to.year, period1_to.month, period1_to.day, 23, 59, 59, tzinfo=timezone.utc)
-    p2_since_dt = datetime(period2_from.year, period2_from.month, period2_from.day, tzinfo=timezone.utc)
-    p2_until_dt = datetime(period2_to.year, period2_to.month, period2_to.day, 23, 59, 59, tzinfo=timezone.utc)
+    """Compare two periods."""
+    p1_since_dt = datetime(period1_from.year, period1_from.month, period1_from.day)
+    p1_until_dt = _day_end(period1_to)
+    p2_since_dt = datetime(period2_from.year, period2_from.month, period2_from.day)
+    p2_until_dt = _day_end(period2_to)
 
-    p1_delay = await _fetch_and_save_data(account, p1_since_dt, p1_until_dt)
-    p2_delay = await _fetch_and_save_data(account, p2_since_dt, p2_until_dt)
-    api_delay_dates = list(set(p1_delay + p2_delay))
+    f1 = await _fetch_and_save_data(account, p1_since_dt, p1_until_dt)
+    f2 = await _fetch_and_save_data(account, p2_since_dt, p2_until_dt)
+    api_delay_dates = sorted(set(f1["api_delay_dates"] + f2["api_delay_dates"]))
+    partial = f1["partial"] or f2["partial"]
+    await _refresh_stories_if_recent(account, max(p1_until_dt, p2_until_dt))
 
-    # Get data
     p1_stats = await crud.get_daily_stats(account.id, period1_from, period1_to)
     p2_stats = await crud.get_daily_stats(account.id, period2_from, period2_to)
     p1_posts = await crud.get_posts(account.id, p1_since_dt, p1_until_dt)
     p2_posts = await crud.get_posts(account.id, p2_since_dt, p2_until_dt)
+    p1_stories = await crud.get_stories(account.id, p1_since_dt, p1_until_dt)
+    p2_stories = await crud.get_stories(account.id, p2_since_dt, p2_until_dt)
 
     s1 = calculate_period_summary(p1_stats)
     s2 = calculate_period_summary(p2_stats)
     c1 = calculate_content_summary(p1_posts)
     c2 = calculate_content_summary(p2_posts)
+    st1 = calculate_stories_summary(p1_stories)
+    st2 = calculate_stories_summary(p2_stories)
 
     p1_str = format_period(period1_from, period1_to)
     p2_str = format_period(period2_from, period2_to)
@@ -313,7 +456,9 @@ async def generate_comparison_periods_report(
         sign = "+" if d >= 0 else ""
         pct_str = f" ({sign}{pct:.1f}%)" if pct is not None else ""
         emoji = "📈" if d > 0 else ("📉" if d < 0 else "➡️")
-        return f"{emoji} {label}: {v1:.1f} → {v2:.1f} ({sign}{d:.1f}{pct_str})" if isinstance(v1, float) else f"{emoji} {label}: {format_number(v1)} → {format_number(v2)} ({sign}{format_number(d)}{pct_str})"
+        if isinstance(v1, float):
+            return f"{emoji} {label}: {v1:.1f} → {v2:.1f} ({sign}{d:.1f}{pct_str})"
+        return f"{emoji} {label}: {format_number(v1)} → {format_number(v2)} ({sign}{format_number(d)}{pct_str})"
 
     lines = [
         f"📊 Сравнение периодов: {p1_str} vs {p2_str}\n",
@@ -330,31 +475,76 @@ async def generate_comparison_periods_report(
         diff_str("Репосты (итого)", c1["total_shares"], c2["total_shares"]),
         "",
         diff_str("Вовлечённость (ER%)", c1["engagement_rate"], c2["engagement_rate"]),
+        "",
+        diff_str("Сторис", st1["total_stories"], st2["total_stories"]),
+        diff_str("Просмотры сторис", st1["total_views"], st2["total_views"]),
+        diff_str("Ответы на сторис", st1["total_replies"], st2["total_replies"]),
     ]
 
-    # AI comparison
-    comparison_data = (
-        f"Период 1 ({p1_str}): прирост подписчиков {s1['followers_growth']}, охват {s1['reach_total']}, "
-        f"просмотры {s1['views_total']}, вовлечено {s1['accounts_engaged_total']}, "
-        f"лайки {c1['total_likes']}, ER {c1['engagement_rate']}%, постов {c1['total_posts']}\n"
-        f"Период 2 ({p2_str}): прирост подписчиков {s2['followers_growth']}, охват {s2['reach_total']}, "
-        f"просмотры {s2['views_total']}, вовлечено {s2['accounts_engaged_total']}, "
-        f"лайки {c2['total_likes']}, ER {c2['engagement_rate']}%, постов {c2['total_posts']}"
-    )
-    ai_analysis = await ai.analyze_comparison(comparison_data)
+    analyzer = get_analyzer()
+    if analyzer:
+        comparison_data = (
+            f"Период 1 ({p1_str}): прирост подписчиков {s1['followers_growth']}, охват {s1['reach_total']}, "
+            f"просмотры {s1['views_total']}, вовлечено {s1['accounts_engaged_total']}, "
+            f"лайки {c1['total_likes']}, ER {c1['engagement_rate']}%, постов {c1['total_posts']}, "
+            f"сторис {st1['total_stories']} (просмотры {st1['total_views']})\n"
+            f"Период 2 ({p2_str}): прирост подписчиков {s2['followers_growth']}, охват {s2['reach_total']}, "
+            f"просмотры {s2['views_total']}, вовлечено {s2['accounts_engaged_total']}, "
+            f"лайки {c2['total_likes']}, ER {c2['engagement_rate']}%, постов {c2['total_posts']}, "
+            f"сторис {st2['total_stories']} (просмотры {st2['total_views']})"
+        )
+        ai_analysis = await analyzer.analyze_comparison(comparison_data)
+    else:
+        ai_analysis = AI_UNAVAILABLE_TEXT
 
     lines.append(f"\n🤖 AI-сравнение\n{ai_analysis}")
+    text = "\n".join(lines) + _warnings_block(api_delay_dates, partial)
 
-    if api_delay_dates:
-        dates_str = ", ".join(api_delay_dates)
-        lines.append(f"\n⚠️ Данные за {dates_str} могут быть неполными (задержка Instagram API ~24-48ч)")
+    charts = {"comparison": create_comparison_chart(
+        ["Подписчики", "Охват", "Просмотры", "Посты", "Сторис"],
+        [s1["followers_growth"], s1["reach_total"], s1["views_total"], c1["total_posts"], st1["total_stories"]],
+        [s2["followers_growth"], s2["reach_total"], s2["views_total"], c2["total_posts"], st2["total_stories"]],
+        p1_str, p2_str,
+    )}
 
     context = {
         "account": f"@{account.username} — {account.name}",
+        "account_username": account.username,
+        "account_name": account.name,
         "period": f"{p1_str} vs {p2_str}",
         "type": "comparison",
-        "period1": {"name": p1_str, "stats": s1, "content": c1},
-        "period2": {"name": p2_str, "stats": s2, "content": c2},
+        "period1": {"name": p1_str, "stats": s1, "content": c1, "stories": st1},
+        "period2": {"name": p2_str, "stats": s2, "content": c2, "stories": st2},
+        "ai_analysis": ai_analysis,
     }
 
-    return {"text": "\n".join(lines), "context": context}
+    return {"text": text, "charts": charts, "context": context}
+
+
+# ────────────────────── Daily digest (for scheduler) ──────────────────────
+
+async def generate_daily_digest(account) -> str:
+    """Compact one-account summary for yesterday. Used by the daily auto-report."""
+    yesterday = date.today() - timedelta(days=1)
+    since_dt = datetime(yesterday.year, yesterday.month, yesterday.day)
+    until_dt = _day_end(yesterday)
+
+    await _fetch_and_save_data(account, since_dt, until_dt)
+    await _refresh_stories_if_recent(account, until_dt)
+
+    stats_list = await crud.get_daily_stats(account.id, yesterday, yesterday)
+    posts_list = await crud.get_posts(account.id, since_dt, until_dt)
+    stories_list = await crud.get_stories(account.id, since_dt, until_dt)
+
+    summary = calculate_period_summary(stats_list)
+    stories_summary = calculate_stories_summary(stories_list)
+
+    return (
+        f"@{account.username}: 👥 {format_growth(summary['followers_growth'])} "
+        f"(всего {format_number(summary['followers_end'])}), "
+        f"охват {format_number(summary['reach_total'])}, "
+        f"просмотры {format_number(summary['views_total'])}, "
+        f"постов: {len(posts_list)}, "
+        f"сторис: {stories_summary['total_stories']} "
+        f"(👁 {format_number(stories_summary['total_views'])})"
+    )

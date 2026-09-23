@@ -24,6 +24,7 @@ class Account(Base):
 
     daily_stats = relationship("DailyStats", back_populates="account", cascade="all, delete-orphan")
     posts = relationship("Post", back_populates="account", cascade="all, delete-orphan")
+    stories = relationship("Story", back_populates="account", cascade="all, delete-orphan")
 
 
 class DailyStats(Base):
@@ -72,4 +73,48 @@ class Post(Base):
     total_interactions = Column(Integer, default=0)
     views = Column(Integer, default=0)  # for VIDEO/REELS only
 
+    # When insight metrics (reach/saved/shares/views/total_interactions)
+    # were last refreshed from the API. None = never. Used by the tiered
+    # refresh logic in services/data_sync.py. Naive UTC.
+    insights_updated_at = Column(DateTime, nullable=True)
+
     account = relationship("Account", back_populates="posts")
+
+
+class Story(Base):
+    """Instagram story. Stories live 24h and their insights are available
+    only ~24h after publishing, so they are collected by the background
+    polling service (services/stories_collector.py), not on demand.
+
+    All datetimes are stored as naive UTC.
+    """
+    __tablename__ = "stories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    instagram_media_id = Column(String(64), unique=True, nullable=False)
+
+    media_type = Column(String(32), default="IMAGE")  # IMAGE / VIDEO
+    permalink = Column(String(512), default="")
+    timestamp = Column(DateTime, nullable=False)      # published at (naive UTC)
+    expires_at = Column(DateTime, nullable=False)     # timestamp + 24h (naive UTC)
+
+    # Insight metrics (available only while the story is fresh)
+    views = Column(Integer, default=0)
+    reach = Column(Integer, default=0)
+    replies = Column(Integer, default=0)
+    shares = Column(Integer, default=0)
+    total_interactions = Column(Integer, default=0)
+    profile_activity = Column(Integer, default=0)
+    follows = Column(Integer, default=0)
+
+    # Navigation breakdown (story_navigation_action_type)
+    tap_forward = Column(Integer, default=0)
+    tap_back = Column(Integer, default=0)
+    tap_exit = Column(Integer, default=0)
+    swipe_forward = Column(Integer, default=0)
+
+    is_active = Column(Boolean, default=True)
+    insights_updated_at = Column(DateTime, nullable=True)
+
+    account = relationship("Account", back_populates="stories")

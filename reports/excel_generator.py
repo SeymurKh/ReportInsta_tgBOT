@@ -21,6 +21,7 @@ def generate_excel_report(
     account_username, account_name, period_str,
     stats_summary, content_summary, daily_stats,
     publications, ai_analysis, dialogue_history=None,
+    stories_summary=None, stories_list=None, comparison_periods=None,
 ) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -112,7 +113,52 @@ def generate_excel_report(
             ws3.cell(row=row, column=8, value=p.get("reach", 0))
             row += 1
 
-    # ── Sheet 4: Dialogue ──
+    # ── Sheet 4: Stories ──
+    if stories_summary:
+        ws_s = wb.create_sheet("Сторис")
+        ws_s["A1"] = "Сводка по сторис"
+        _ss(ws_s["A1"])
+        _ss(ws_s["B1"])
+        for i, (label, key) in enumerate([
+            ("Всего сторис", "total_stories"),
+            ("Просмотры (итого)", "total_views"),
+            ("Просмотры (средние)", "avg_views"),
+            ("Охват (итого)", "total_reach"),
+            ("Охват (средний)", "avg_reach"),
+            ("Ответы", "total_replies"),
+            ("Репосты", "total_shares"),
+            ("Переходы в профиль", "total_profile_activity"),
+            ("Подписки со сторис", "total_follows"),
+            ("Выходы, %", "exit_rate"),
+            ("Тапы вперёд", "tap_forward_total"),
+            ("Тапы назад", "tap_back_total"),
+        ], start=2):
+            ws_s.cell(row=i, column=1, value=label)
+            ws_s.cell(row=i, column=2, value=stories_summary.get(key, 0))
+        ws_s.column_dimensions["A"].width = 24
+        ws_s.column_dimensions["B"].width = 16
+
+        header_row = 15
+        headers_s = ["Дата", "Тип", "Просмотры", "Охват", "Ответы", "Репосты",
+                     "Профиль", "Подписки", "Вперёд", "Назад", "Выходы", "Свайпы"]
+        for col, h in enumerate(headers_s, 1):
+            _hs(ws_s.cell(row=header_row, column=col, value=h))
+        tn_s = {"IMAGE": "Фото", "VIDEO": "Видео"}
+        for i, s in enumerate(stories_list or [], header_row + 1):
+            ws_s.cell(row=i, column=1, value=s.get("date", ""))
+            ws_s.cell(row=i, column=2, value=tn_s.get(s.get("media_type", ""), s.get("media_type", "")))
+            ws_s.cell(row=i, column=3, value=s.get("views", 0))
+            ws_s.cell(row=i, column=4, value=s.get("reach", 0))
+            ws_s.cell(row=i, column=5, value=s.get("replies", 0))
+            ws_s.cell(row=i, column=6, value=s.get("shares", 0))
+            ws_s.cell(row=i, column=7, value=s.get("profile_activity", 0))
+            ws_s.cell(row=i, column=8, value=s.get("follows", 0))
+            ws_s.cell(row=i, column=9, value=s.get("tap_forward", 0))
+            ws_s.cell(row=i, column=10, value=s.get("tap_back", 0))
+            ws_s.cell(row=i, column=11, value=s.get("tap_exit", 0))
+            ws_s.cell(row=i, column=12, value=s.get("swipe_forward", 0))
+
+    # ── Sheet 5: Dialogue ──
     if dialogue_history:
         ws4 = wb.create_sheet("Диалог с AI")
         ws4.column_dimensions["A"].width = 14
@@ -123,6 +169,46 @@ def generate_excel_report(
             ws4.cell(row=i, column=1, value="Вопрос" if msg.get("role") == "user" else "Ответ")
             c = ws4.cell(row=i, column=2, value=msg.get("content", ""))
             c.alignment = Alignment(wrap_text=True)
+
+    if comparison_periods:
+        ws_cmp = wb.create_sheet("Ð¡Ñ€Ð°Ð²Ð½ÐµÐ½Ð¸Ðµ")
+        headers = ["ÐŸÐ¾ÐºÐ°Ð·Ð°Ñ‚ÐµÐ»ÑŒ", "ÐŸÐµÑ€Ð¸Ð¾Ð´ 1", "ÐŸÐµÑ€Ð¸Ð¾Ð´ 2"]
+        for col, header in enumerate(headers, 1):
+            _hs(ws_cmp.cell(row=1, column=col, value=header))
+        p1, p2 = comparison_periods
+        metric_groups = [
+            ("Ð¡Ñ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ°", [
+                ("ÐŸÑ€Ð¸Ñ€Ð¾ÑÑ‚ ÑÐ»ÐµÐ´Ð¾Ð²Ð°Ñ‚ÐµÐ»ÐµÐ¹", "followers_growth"),
+                ("ÐžÑ…Ð²Ð°Ñ‚", "reach_total"),
+                ("ÐŸÑ€Ð¾ÑÐ¼Ð¾Ñ‚Ñ€Ñ‹", "views_total"),
+                ("Ð’Ð¾Ð²Ð»ÐµÑ‡ÐµÐ½Ð¾", "accounts_engaged_total"),
+            ], "stats"),
+            ("ÐšÐ¾Ð½Ñ‚ÐµÐ½Ñ‚", [
+                ("ÐŸÑƒÐ±Ð»Ð¸ÐºÐ°Ñ†Ð¸Ð¸", "total_posts"),
+                ("Ð›Ð°Ð¹ÐºÐ¸", "total_likes"),
+                ("ÐšÐ¾Ð¼Ð¼ÐµÐ½Ñ‚Ð°Ñ€Ð¸Ð¸", "total_comments"),
+                ("ER %", "engagement_rate"),
+            ], "content"),
+            ("Ð¡Ñ‚Ð¾Ñ€Ð¸Ñ", [
+                ("ÐšÐ¾Ð»Ð¸Ñ‡ÐµÑÑ‚Ð²Ð¾", "total_stories"),
+                ("ÐŸÑ€Ð¾ÑÐ¼Ð¾Ñ‚Ñ€Ñ‹", "total_views"),
+                ("ÐžÑ‚Ð²ÐµÑ‚Ñ‹", "total_replies"),
+            ], "stories"),
+        ]
+        row = 2
+        for group, metrics, key in metric_groups:
+            ws_cmp.cell(row=row, column=1, value=group)
+            _ss(ws_cmp.cell(row=row, column=1))
+            row += 1
+            d1, d2 = p1.get(key, {}), p2.get(key, {})
+            for label, metric in metrics:
+                ws_cmp.cell(row=row, column=1, value=label)
+                ws_cmp.cell(row=row, column=2, value=d1.get(metric, 0))
+                ws_cmp.cell(row=row, column=3, value=d2.get(metric, 0))
+                row += 1
+        ws_cmp.column_dimensions["A"].width = 30
+        ws_cmp.column_dimensions["B"].width = 18
+        ws_cmp.column_dimensions["C"].width = 18
 
     buf = io.BytesIO()
     wb.save(buf)

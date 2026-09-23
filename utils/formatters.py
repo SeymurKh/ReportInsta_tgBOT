@@ -60,6 +60,15 @@ def format_context_for_ai(context: dict) -> str:
         lines.append(f"\nПериод 2 ({p2.get('name', '')}):")
         lines.append(f"  Подписчики: {s2.get('followers_end', 0)}, Охват: {s2.get('reach_total', 0)}, "
                      f"Просмотры: {s2.get('views_total', 0)}, ER: {c2.get('engagement_rate', 0)}%")
+
+        # Stories per period (if present)
+        st1 = p1.get("stories", {})
+        st2 = p2.get("stories", {})
+        if st1 or st2:
+            lines.append(f"\nСторис период 1: {st1.get('total_stories', 0)} шт, "
+                         f"просмотры {st1.get('total_views', 0)}, ответы {st1.get('total_replies', 0)}")
+            lines.append(f"Сторис период 2: {st2.get('total_stories', 0)} шт, "
+                         f"просмотры {st2.get('total_views', 0)}, ответы {st2.get('total_replies', 0)}")
     else:
         # Regular report
         stats = context.get("stats", {})
@@ -92,6 +101,17 @@ def format_context_for_ai(context: dict) -> str:
                     mtype = type_name.get(p["type"], p["type"])
                     lines.append(f"    {mtype}: \"{p['caption'][:50]}\" — "
                                  f"❤️{p['likes']} 💬{p['comments']} 💾{p['saved']} 📤{p['shares']} reach:{p['reach']}")
+
+        # Stories of the period
+        stories = context.get("stories", {})
+        if stories.get("total_stories"):
+            lines.append(f"\nСторис: {stories['total_stories']} шт, просмотры {stories['total_views']} "
+                         f"(ср. {stories['avg_views']}), охват {stories['total_reach']}, "
+                         f"ответы {stories['total_replies']}, репосты {stories['total_shares']}, "
+                         f"выходы {stories['exit_rate']}%")
+            for s in context.get("stories_list", [])[:20]:
+                lines.append(f"  {s['date']}: 👁{s['views']} охват:{s['reach']} "
+                             f"💬{s['replies']} 📤{s['shares']}")
 
         # Best post
         best = context.get("best_post", "")

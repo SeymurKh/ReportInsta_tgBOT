@@ -124,6 +124,49 @@ def detect_trend(stats_list: list, metric: str = "followers", window: int = 7) -
     return "stable"
 
 
+def calculate_stories_summary(stories_list: list) -> dict:
+    """Aggregate story metrics for a period."""
+    if not stories_list:
+        return {
+            "total_stories": 0, "active_stories": 0,
+            "total_views": 0, "total_reach": 0, "total_replies": 0,
+            "total_shares": 0, "total_interactions": 0,
+            "total_profile_activity": 0, "total_follows": 0,
+            "avg_views": 0, "avg_reach": 0,
+            "exit_rate": 0.0, "tap_forward_total": 0, "tap_back_total": 0,
+        }
+
+    total = len(stories_list)
+    total_views = sum(s.views for s in stories_list)
+    total_reach = sum(s.reach for s in stories_list)
+    total_exits = sum(s.tap_exit + s.swipe_forward for s in stories_list)
+    exit_rate = round(total_exits / total_views * 100, 1) if total_views > 0 else 0.0
+
+    return {
+        "total_stories": total,
+        "active_stories": sum(1 for s in stories_list if s.is_active),
+        "total_views": total_views,
+        "total_reach": total_reach,
+        "total_replies": sum(s.replies for s in stories_list),
+        "total_shares": sum(s.shares for s in stories_list),
+        "total_interactions": sum(s.total_interactions for s in stories_list),
+        "total_profile_activity": sum(s.profile_activity for s in stories_list),
+        "total_follows": sum(s.follows for s in stories_list),
+        "avg_views": round(total_views / total),
+        "avg_reach": round(total_reach / total),
+        "exit_rate": exit_rate,
+        "tap_forward_total": sum(s.tap_forward for s in stories_list),
+        "tap_back_total": sum(s.tap_back for s in stories_list),
+    }
+
+
+def get_best_story(stories_list: list):
+    """Best story by views (fallback: reach)."""
+    if not stories_list:
+        return None
+    return max(stories_list, key=lambda s: (s.views, s.reach))
+
+
 def compare_accounts(accounts_data: list) -> dict:
     if not accounts_data:
         return {}
