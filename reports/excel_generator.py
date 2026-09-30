@@ -117,8 +117,13 @@ def generate_excel_report(
     for cell in ws["A4:D4"][0]:
         cell.fill = _fill(LIGHT_BLUE)
         cell.border = THIN_BORDER
+    current_followers = stats_summary.get("followers_current")
+    if "followers_current" not in stats_summary:
+        current_followers = stats_summary.get("followers_end")
+    if current_followers is None:
+        current_followers = "н/д"
     cards = [
-        ("A5", "B5", "Подписчики", stats_summary.get("followers_end", "—")),
+        ("A5", "B5", "Сейчас подписчиков", current_followers),
         ("C5", "D5", "Прирост", stats_summary.get("followers_growth", "—")),
         ("A7", "B7", "Охват", stats_summary.get("reach_total", "—")),
         ("C7", "D7", "Просмотры", stats_summary.get("views_total", "—")),
@@ -135,7 +140,8 @@ def generate_excel_report(
     sections = [
         ("Аккаунт", [("Имя", account_name), ("Username", f"@{account_username}")]),
         ("Статистика", [
-            ("Подписчики", stats_summary.get("followers_end", "—")),
+            ("Подписчики сейчас", current_followers),
+            ("Подписчики на конец периода", stats_summary.get("followers_end", "—")),
             ("Прирост", stats_summary.get("followers_growth", "—")),
             ("Прирост %", stats_summary.get("followers_growth_pct", 0)),
             ("Охват", stats_summary.get("reach_total", "—")),

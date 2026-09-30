@@ -31,6 +31,21 @@ class AIPromptTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_account_prompt_defines_best_post_and_short_term_trend(self):
+        await self.analyzer.analyze_account(
+            "01.09–29.09",
+            {"followers_current": 208, "followers_growth": 23, "followers_growth_pct": None},
+            {"total_posts": 5, "avg_likes": 60, "avg_reach": 841,
+             "engagement_rate": 8.9, "total_interactions": 375, "total_reach": 4204},
+            '"Best post" | reach 121',
+            "declining",
+        )
+
+        prompt = self.analyzer.client.chat.completions.create.await_args.kwargs["messages"][1]["content"]
+        self.assertIn("не обязательно имеет максимальный охват", prompt)
+        self.assertIn("не прирост за весь период", prompt)
+        self.assertIn("Не называй охват выбранного лучшего поста слабым", prompt)
+
     async def test_comparison_prompt_contains_new_data_rules(self):
         result = await self.analyzer.analyze_comparison(
             "P1 reach 100; P2 reach 200\nFORMAT PERFORMANCE BY PERIOD:\n"

@@ -148,16 +148,12 @@ async def _sync_with_backoff(account, since_dt: datetime, until_dt: datetime) ->
             result = await sync_account_data(account, since_dt, until_dt)
             if result.get("skipped"):
                 return
-            if result.get("partial") and attempt < max_attempts:
-                delay = min(300, 2 ** (attempt - 1) * 10)
-                logger.warning(
-                    "Sync for @%s was partial; retrying whole account in %ss",
-                    account.username, delay,
-                )
-                await asyncio.sleep(delay)
-                continue
             if result.get("partial"):
-                logger.warning("Sync for @%s remains partial after retries", account.username)
+                logger.warning(
+                    "Sync for @%s completed partially: %s",
+                    account.username,
+                    "; ".join(result.get("partial_reasons", [])) or "unspecified data gap",
+                )
             return
         except Exception:
             if attempt == max_attempts:

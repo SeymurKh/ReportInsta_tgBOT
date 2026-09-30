@@ -10,7 +10,9 @@ def format_number(n: int | float) -> str:
     return f"{n:,.0f}".replace(",", " ")
 
 
-def format_pct(n: float) -> str:
+def format_pct(n: float | None) -> str:
+    if n is None:
+        return "н/д"
     sign = "+" if n >= 0 else ""
     return f"{sign}{n:.1f}%"
 
@@ -27,7 +29,9 @@ def format_period(d_from: date, d_to: date) -> str:
     return f"{format_date(d_from)} – {format_date(d_to)}"
 
 
-def format_growth(n: int | float) -> str:
+def format_growth(n: int | float | None) -> str:
+    if n is None:
+        return "н/д"
     if n >= 0:
         return f"📈 +{format_number(n)}"
     return f"📉 {format_number(n)}"
@@ -103,7 +107,11 @@ def format_context_for_ai(context: dict) -> str:
         # Regular report
         stats = context.get("stats", {})
         content = context.get("content", {})
-        lines.append(f"Подписчики: {stats.get('followers_end', 0)} (прирост: {stats.get('followers_growth', 0)})")
+        followers_now = stats.get("followers_current", stats.get("followers_end"))
+        lines.append(
+            f"Подписчики сейчас: {followers_now if followers_now is not None else 'н/д'} "
+            f"(прирост за период: {stats.get('followers_growth') if stats.get('followers_growth') is not None else 'н/д'})"
+        )
         lines.append(f"Охват: {stats.get('reach_total', 0)} | Просмотры: {stats.get('views_total', 0)}")
         lines.append(f"Вовлечено: {stats.get('accounts_engaged_total', 0)}")
         lines.append(f"Публикаций: {content.get('total_posts', 0)} (Reels: {content.get('total_reels', 0)}, "
@@ -116,7 +124,6 @@ def format_context_for_ai(context: dict) -> str:
                 f"Полнота Insights публикаций: неполных {content.get('partial_insights_posts', 0)}, "
                 f"старых неизвестных {content.get('legacy_unknown_insights', 0)}"
             )
-
     quality = context.get("data_quality")
     if quality:
         lines.append(
@@ -136,46 +143,48 @@ def format_context_for_ai(context: dict) -> str:
                 f"Для {quality['legacy_unknown_days']} старых дней API-полнота неизвестна."
             )
 
-        # Daily stats
-        daily = context.get("daily_stats", [])
-        if daily:
-            lines.append("\nДанные по дням:")
-            for d in daily[:14]:
-                lines.append(f"  {d['date']}: охват {d['reach']}, подписчики {d['followers']:+d}, "
-                             f"просмотры {d['views']}, вовлечено {d['accounts_engaged']}")
+    # Daily stats
+    daily = context.get("daily_stats", [])
+    if daily:
+        lines.append("\nДанные по дням:")
+        for d in daily[:14]:
+            followers = d.get("followers")
+            followers_text = f"{followers:+d}" if followers is not None else "н/д"
+            lines.append(f"  {d['date']}: охват {d['reach']}, подписчики {followers_text}, "
+                         f"просмотры {d['views']}, вовлечено {d['accounts_engaged']}")
 
-        # Publications calendar
-        publications = context.get("publications", [])
-        if publications:
-            lines.append("\nПубликации по дням:")
-            type_name = {"IMAGE": "Фото", "VIDEO": "Видео", "CAROUSEL_ALBUM": "Карусель", "REELS": "Reels"}
-            for day in publications[:12]:
-                lines.append(f"  {day['date']}:")
-                for p in day["posts"]:
-                    mtype = type_name.get(p["type"], p["type"])
-                    lines.append(f"    {mtype}: \"{p['caption'][:50]}\" — "
-                                 f"❤️{p['likes']} 💬{p['comments']} 💾{p['saved']} 📤{p['shares']} reach:{p['reach']}")
+    # Publications calendar
+    publications = context.get("publications", [])
+    if publications:
+        lines.append("\nПубликации по дням:")
+        type_name = {"IMAGE": "Фото", "VIDEO": "Видео", "CAROUSEL_ALBUM": "Карусель", "REELS": "Reels"}
+        for day in publications[:12]:
+            lines.append(f"  {day['date']}:")
+            for p in day["posts"]:
+                mtype = type_name.get(p["type"], p["type"])
+                lines.append(f"    {mtype}: \"{p['caption'][:50]}\" — "
+                             f"❤️{p['likes']} 💬{p['comments']} 💾{p['saved']} 📤{p['shares']} reach:{p['reach']}")
 
-        # Stories of the period
-        stories = context.get("stories", {})
-        if stories.get("total_stories"):
-            lines.append(f"\nСторис: {stories['total_stories']} шт, просмотры {stories['total_views']} "
-                         f"(ср. {stories['avg_views']}), охват {stories['total_reach']}, "
-                         f"ответы {stories['total_replies']}, репосты {stories['total_shares']}, "
-                         f"выходы {stories['exit_rate']}%")
-            if stories.get("partial_insights_stories") or stories.get("legacy_unknown_insights"):
-                lines.append(
-                    f"Полнота Insights сторис: неполных {stories.get('partial_insights_stories', 0)}, "
-                    f"старых неизвестных {stories.get('legacy_unknown_insights', 0)}"
-                )
-            for s in context.get("stories_list", [])[:20]:
-                lines.append(f"  {s['date']}: 👁{s['views']} охват:{s['reach']} "
-                             f"💬{s['replies']} 📤{s['shares']}")
+    # Stories of the period
+    stories = context.get("stories", {})
+    if stories.get("total_stories"):
+        lines.append(f"\nСторис: {stories['total_stories']} шт, просмотры {stories['total_views']} "
+                     f"(ср. {stories['avg_views']}), охват {stories['total_reach']}, "
+                     f"ответы {stories['total_replies']}, репосты {stories['total_shares']}, "
+                     f"выходы {stories['exit_rate']}%")
+        if stories.get("partial_insights_stories") or stories.get("legacy_unknown_insights"):
+            lines.append(
+                f"Полнота Insights сторис: неполных {stories.get('partial_insights_stories', 0)}, "
+                f"старых неизвестных {stories.get('legacy_unknown_insights', 0)}"
+            )
+        for s in context.get("stories_list", [])[:20]:
+            lines.append(f"  {s['date']}: 👁{s['views']} охват:{s['reach']} "
+                         f"💬{s['replies']} 📤{s['shares']}")
 
-        # Best post
-        best = context.get("best_post", "")
-        if best and best != "нет данных":
-            lines.append(f"\nЛучший пост:\n{best}")
+    # Best post
+    best = context.get("best_post", "")
+    if best and best != "нет данных":
+        lines.append(f"\nЛучший пост:\n{best}")
 
     top_posts = context.get("top_posts", [])
     if top_posts:

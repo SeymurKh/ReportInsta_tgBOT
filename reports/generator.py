@@ -8,7 +8,7 @@ from services.data_sync import sync_account_data
 from analytics.calculations import (
     calculate_period_summary, calculate_content_summary, calculate_stories_summary,
     get_best_post, get_best_story, detect_trend, top_posts_by_metric,
-    compare_content_formats, daily_peaks, data_quality_summary,
+    compare_content_formats, daily_peaks, data_quality_summary, metric_is_present,
 )
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from reports.charts import (
@@ -27,6 +27,18 @@ WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 def _day_end(value: date) -> datetime:
     """Return the UTC end-of-day for a calendar date."""
     return datetime(value.year, value.month, value.day, 23, 59, 59)
+
+
+def _current_followers_snapshot(account, latest_stats) -> tuple[int | None, datetime | None]:
+    value = getattr(account, "current_followers", None)
+    observed_at = getattr(account, "current_followers_at", None)
+    if value is not None:
+        return value, observed_at
+    if latest_stats is None:
+        return None, None
+    if metric_is_present(latest_stats, "followers_snapshot") or latest_stats.followers > 0:
+        return latest_stats.followers, getattr(latest_stats, "collected_at", None)
+    return None, None
 
 
 def resolve_period(
@@ -163,6 +175,22 @@ async def generate_report(
     data_quality = data_quality_summary(
         stats_list, expected_days=(date_to - date_from).days + 1
     )
+    latest_stats = await crud.get_latest_stats(account.id)
+    current_followers, current_followers_at = _current_followers_snapshot(
+        account, latest_stats
+    )
+    stats_summary["followers_current"] = current_followers
+    stats_summary["followers_current_at"] = current_followers_at.isoformat() if current_followers_at else None
+    follower_growth_known = (
+        data_quality["missing_days"] == 0
+        and data_quality["legacy_unknown_days"] == 0
+        and data_quality["metric_missing_days"].get("follower_count", 0) == 0
+    )
+    if not follower_growth_known:
+        stats_summary["followers_growth"] = None
+        stats_summary["followers_growth_pct"] = None
+        stats_summary["followers_start"] = None
+        stats_summary["followers_growth_known"] = False
 
     best = get_best_post(posts_list)
     best_info = "нет данных"
@@ -187,7 +215,17 @@ async def generate_report(
     else:
         ai_analysis = AI_UNAVAILABLE_TEXT
 
-    trend_map = {"growing": "📈 Растущий", "declining": "📉 Снижающийся", "stable": "➡️ Стабильный"}
+    trend_map = {
+        "growing": "📈 Растущий", "declining": "📉 Снижающийся",
+        "stable": "➡️ Стабильный", "unknown": "н/д (неполные данные)",
+    }
+    trend_window = min(7, max(1, len(stats_list) // 2)) if len(stats_list) > 1 else 0
+    if len(stats_list) >= 14:
+        trend_label = f"Краткосрочный тренд (последние {trend_window} дн. к предыдущим {trend_window} дн.)"
+    elif trend_window:
+        trend_label = f"Краткосрочный тренд (сравнение окон по {trend_window} дн.)"
+    else:
+        trend_label = "Краткосрочный тренд"
     views_str = format_number(stats_summary['views_total']) if stats_summary['views_total'] > 0 else "н/д"
     accounts_engaged_str = format_number(stats_summary['accounts_engaged_total']) if stats_summary['accounts_engaged_total'] > 0 else "н/д"
 
@@ -217,9 +255,9 @@ async def generate_report(
 📅 Период: {period_str}
 
 👥 Подписчики
-Текущие: {format_number(stats_summary['followers_end'])}
-Прирост: {format_growth(stats_summary['followers_growth'])} ({format_pct(stats_summary['followers_growth_pct'])})
-Тренд: {trend_map.get(trend, trend)}
+Текущие: {format_number(current_followers) if current_followers is not None else 'н/д'}
+Прирост за период: {format_growth(stats_summary['followers_growth'])} ({format_pct(stats_summary['followers_growth_pct'])})
+{trend_label}: {trend_map.get(trend, trend)}
 
 📈 Активность
 Охват: {format_number(stats_summary['reach_total'])}
@@ -230,14 +268,14 @@ async def generate_report(
 📹 Контент ({content_summary['total_posts']} публикаций)
 Reels: {content_summary['total_reels']} | Видео: {content_summary['total_videos']} | Фото: {content_summary['total_images']} | Карусели: {content_summary['total_carousels']}
 Средние лайки: {content_summary['avg_likes']} | Средний охват: {content_summary['avg_reach']}
-Вовлечённость (ER): {content_summary['engagement_rate']}%
+Вовлечённость (ER по total_interactions Insights / охвату публикаций): {content_summary['engagement_rate']}% ({format_number(content_summary['total_interactions'])} / {format_number(content_summary['total_reach'])})
 
 {stories_text}
 
 📋 Публикации
 {publications_text}
 
-🏆 Лучший пост
+🏆 Лучший пост по оценке взаимодействий с учётом охвата
 {best_info}
 
 🤖 AI-анализ
@@ -258,6 +296,10 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
                 f"; у {data_quality['legacy_unknown_days']} старых дн. "
                 "нет сведений о том, какие метрики вернул API"
             )
+        if data_quality["invalid_metadata_days"]:
+            report_text += (
+                f"; у {data_quality['invalid_metadata_days']} дн. повреждены метаданные полноты"
+            )
     if content_summary["partial_insights_posts"] or content_summary["legacy_unknown_insights"]:
         report_text += (
             f"\nℹ️ Insights публикаций: неполных — {content_summary['partial_insights_posts']}; "
@@ -273,7 +315,11 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
     charts = {}
     if stats_list:
         dates = [s.date for s in stats_list]
-        charts["followers"] = create_followers_chart(dates, [s.follower_count for s in stats_list])
+        follower_values = [
+            s.follower_count if metric_is_present(s, "follower_count") else None
+            for s in stats_list
+        ]
+        charts["followers"] = create_followers_chart(dates, follower_values)
         charts["reach"] = create_metrics_chart(dates, [s.reach for s in stats_list])
     stories_chart = _stories_chart(stories_list)
     if stories_chart:
@@ -283,7 +329,9 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
     daily_stats_data = [{
         "date": s.date.strftime("%d.%m"),
         "reach": s.reach,
-        "followers": s.follower_count,
+        "followers": (
+            s.follower_count if metric_is_present(s, "follower_count") else None
+        ),
         "views": s.views,
         "accounts_engaged": s.accounts_engaged,
     } for s in stats_list]
@@ -361,6 +409,20 @@ async def generate_comparison_periods_report(
 
     s1 = calculate_period_summary(p1_stats)
     s2 = calculate_period_summary(p2_stats)
+    for summary, quality in (
+        (s1, data_quality_summary(p1_stats, expected_days=period1_days)),
+        (s2, data_quality_summary(p2_stats, expected_days=period2_days)),
+    ):
+        follower_growth_known = (
+            quality["missing_days"] == 0
+            and quality["legacy_unknown_days"] == 0
+            and quality["metric_missing_days"].get("follower_count", 0) == 0
+        )
+        if not follower_growth_known:
+            summary["followers_start"] = None
+            summary["followers_growth"] = None
+            summary["followers_growth_pct"] = None
+            summary["followers_growth_known"] = False
     c1 = calculate_content_summary(p1_posts)
     c2 = calculate_content_summary(p2_posts)
     formats1 = compare_content_formats(p1_posts)
@@ -374,12 +436,16 @@ async def generate_comparison_periods_report(
     p2_str = format_period(period2_from, period2_to)
 
     def diff(v1, v2):
+        if v1 is None or v2 is None:
+            return None, None
         d = v2 - v1
         pct = round(d / v1 * 100, 1) if v1 > 0 else None
         return d, pct
 
     def diff_str(label, v1, v2):
         d, pct = diff(v1, v2)
+        if d is None:
+            return f"ℹ️ {label}: н/д (неполные данные)"
         sign = "+" if d >= 0 else ""
         pct_str = f" ({sign}{pct:.1f}%)" if pct is not None else ""
         emoji = "📈" if d > 0 else ("📉" if d < 0 else "➡️")
@@ -390,6 +456,8 @@ async def generate_comparison_periods_report(
     def daily_average(summary, available_days, field):
         """Normalize a period total by calendar days, preserving missing data."""
         total = summary[field]
+        if total is None:
+            return None
         return round(total / available_days) if available_days else 0
 
     p1_available = len(p1_stats)
@@ -533,11 +601,13 @@ async def generate_daily_digest(account, target_date: date | None = None) -> str
     stories_list = await crud.get_stories(account.id, since_dt, until_dt)
 
     summary = calculate_period_summary(stats_list)
+    latest_stats = await crud.get_latest_stats(account.id)
+    current_followers, _ = _current_followers_snapshot(account, latest_stats)
     stories_summary = calculate_stories_summary(stories_list)
 
     return (
         f"@{account.username}: 👥 {format_growth(summary['followers_growth'])} "
-        f"(всего {format_number(summary['followers_end'])}), "
+        f"(сейчас {format_number(current_followers) if current_followers is not None else 'н/д'}), "
         f"охват {format_number(summary['reach_total'])}, "
         f"просмотры {format_number(summary['views_total'])}, "
         f"постов: {len(posts_list)}, "

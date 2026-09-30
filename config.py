@@ -87,6 +87,7 @@ class Settings:
     POSTS_HOT_DAYS: int = int(os.getenv("POSTS_HOT_DAYS", "3"))       # <= N days: every sync
     POSTS_WARM_DAYS: int = int(os.getenv("POSTS_WARM_DAYS", "14"))    # <= N days: once a day
     POSTS_WARM_INTERVAL_HOURS: int = int(os.getenv("POSTS_WARM_INTERVAL_HOURS", "24"))
+    POSTS_COLD_INTERVAL_DAYS: int = int(os.getenv("POSTS_COLD_INTERVAL_DAYS", "7"))
 
     # Chart settings
     CHART_STYLE: str = "seaborn-v0_8-whitegrid"

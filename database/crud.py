@@ -78,6 +78,19 @@ async def update_account_token(instagram_user_id: str, new_token: str) -> None:
         await session.commit()
 
 
+async def update_current_followers(
+    account_id: int, followers: int, observed_at: datetime
+) -> None:
+    """Keep the latest profile total independent from daily insight metrics."""
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(current_followers=followers, current_followers_at=observed_at)
+        )
+        await session.commit()
+
+
 async def update_account_sync_status(
     account_id: int,
     status: str,
@@ -88,7 +101,7 @@ async def update_account_sync_status(
         "sync_status": status,
         "last_sync_error": error[:1000] if error else None,
     }
-    if status == "success":
+    if status in {"success", "partial"}:
         values["last_sync_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
     async with async_session_factory() as session:
         await session.execute(
@@ -314,6 +327,70 @@ async def save_daily_stats(
                                  if metrics_present is not None else None),
             ))
 
+        await session.commit()
+
+
+async def save_follower_snapshot(
+    account_id: int,
+    stats_date: date,
+    followers: int,
+    daily_delta: int | None,
+    collected_at: datetime,
+    following: int | None = None,
+    media_count: int | None = None,
+) -> None:
+    """Persist the profile total independently from the optional daily delta."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(DailyStats).where(
+                DailyStats.account_id == account_id,
+                DailyStats.date == stats_date,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            present = {"followers_snapshot"}
+            if daily_delta is not None:
+                present.add("follower_count")
+            session.add(DailyStats(
+                account_id=account_id,
+                date=stats_date,
+                followers=followers,
+                following=following or 0,
+                media_count=media_count or 0,
+                reach=0,
+                follower_count=daily_delta or 0,
+                views=0,
+                accounts_engaged=0,
+                collected_at=collected_at,
+                is_partial=True,
+                metrics_present=json.dumps(sorted(present)),
+            ))
+        else:
+            row.followers = followers
+            if following is not None:
+                row.following = following
+            if media_count is not None:
+                row.media_count = media_count
+            if daily_delta is not None:
+                row.follower_count = daily_delta
+            row.collected_at = collected_at
+            if row.metrics_present:
+                try:
+                    decoded = json.loads(row.metrics_present)
+                    present = (
+                        set(decoded)
+                        if isinstance(decoded, list)
+                        and all(isinstance(value, str) for value in decoded)
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    present = None
+                if present is not None:
+                    present.add("followers_snapshot")
+                    if daily_delta is not None:
+                        present.add("follower_count")
+                    row.metrics_present = json.dumps(sorted(present))
         await session.commit()
 
 

@@ -23,6 +23,9 @@ async def collect_sync_health_issues(now: datetime | None = None) -> list[str]:
         if status == "failed":
             error = (getattr(account, "last_sync_error", None) or "неизвестная ошибка")[:180]
             issues.append(f"@{account.username}: ошибка синхронизации — {error}")
+        elif status == "partial":
+            reason = (getattr(account, "last_sync_error", None) or "есть пропуски метрик")[:180]
+            issues.append(f"@{account.username}: частичная синхронизация — {reason}")
         elif not last_sync_at:
             issues.append(f"@{account.username}: синхронизация ещё не выполнялась")
         elif current - last_sync_at > stale_after:

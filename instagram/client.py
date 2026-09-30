@@ -166,9 +166,20 @@ class InstagramClient:
         for item in data.get("data", []):
             if item.get("name") != "follower_count":
                 continue
-            values = item.get("values", [])
-            if values:
-                return values[-1].get("value")
+            current_day_values = []
+            for value in item.get("values", []):
+                end_time = value.get("end_time")
+                if not end_time:
+                    continue
+                try:
+                    value_date = parse_ig_timestamp(end_time).date()
+                except (TypeError, ValueError):
+                    logger.warning("Ignoring invalid follower insight end_time")
+                    continue
+                if value_date == current.date():
+                    current_day_values.append(value)
+            if current_day_values:
+                return current_day_values[-1].get("value")
         return None
 
     async def get_account_insights_new_metrics_day(self, day_start: int, day_end: int) -> dict:

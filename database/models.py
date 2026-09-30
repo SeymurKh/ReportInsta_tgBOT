@@ -22,6 +22,8 @@ class Account(Base):
     sync_status = Column(String(32), default="never", nullable=False)
     last_sync_at = Column(DateTime, nullable=True)
     last_sync_error = Column(Text, nullable=True)
+    current_followers = Column(Integer, nullable=True)
+    current_followers_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

@@ -3,6 +3,33 @@ from typing import Optional
 import json
 
 
+def metric_is_present(row, metric: str) -> bool:
+    """Treat old test/data objects without provenance as legacy-compatible."""
+    if not hasattr(row, "metrics_present"):
+        return True
+    raw = row.metrics_present
+    if raw is None:
+        return False
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(values, list) and metric in values
+
+
+def _metrics_present(row) -> set[str] | None:
+    raw = getattr(row, "metrics_present", None)
+    if raw is None:
+        return None
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        return None
+    return set(values)
+
+
 def calculate_growth(current: int, previous: int) -> tuple[int, Optional[float]]:
     absolute = current - previous
     if previous == 0:
@@ -14,8 +41,9 @@ def calculate_growth(current: int, previous: int) -> tuple[int, Optional[float]]
 def calculate_period_summary(stats_list: list) -> dict:
     if not stats_list:
         return {
-            "followers_start": 0, "followers_end": 0,
-            "followers_growth": 0, "followers_growth_pct": 0.0,
+            "followers_start": None, "followers_end": None,
+            "followers_growth": None, "followers_growth_pct": None,
+            "followers_growth_known": False,
             "reach_total": 0, "views_total": 0, "accounts_engaged_total": 0,
             "reach_avg_daily": 0, "views_avg_daily": 0, "accounts_engaged_avg_daily": 0,
         }
@@ -23,10 +51,20 @@ def calculate_period_summary(stats_list: list) -> dict:
     last = stats_list[-1]
     followers_end = last.followers
 
-    # Growth = sum of daily follower_count changes from insights
-    growth = sum(s.follower_count for s in stats_list)
-    followers_start = followers_end - growth
-    growth_pct = round(growth / followers_start * 100, 1) if followers_start != 0 else 0.0
+    growth_known = all(metric_is_present(row, "follower_count") for row in stats_list)
+    growth = sum(s.follower_count for s in stats_list) if growth_known else None
+    followers_start = (
+        followers_end - growth
+        if growth is not None and followers_end is not None and followers_end >= 0
+        else None
+    )
+    if followers_start is not None and followers_start < 0:
+        followers_start = None
+    growth_pct = (
+        round(growth / followers_start * 100, 1)
+        if growth is not None and followers_start is not None and followers_start > 0
+        else None
+    )
 
     reach_total = sum(s.reach for s in stats_list)
     views_total = sum(s.views for s in stats_list)
@@ -38,6 +76,7 @@ def calculate_period_summary(stats_list: list) -> dict:
         "followers_end": followers_end,
         "followers_growth": growth,
         "followers_growth_pct": growth_pct,
+        "followers_growth_known": growth_known,
         "reach_total": reach_total,
         "views_total": views_total,
         "accounts_engaged_total": accounts_engaged_total,
@@ -52,6 +91,7 @@ def calculate_content_summary(posts_list: list) -> dict:
         return {
             "total_posts": 0, "total_reels": 0, "total_videos": 0, "total_carousels": 0, "total_images": 0,
             "total_likes": 0, "total_comments": 0, "total_saves": 0, "total_shares": 0,
+            "total_interactions": 0, "total_reach": 0,
             "avg_likes": 0, "avg_comments": 0, "avg_reach": 0,
             "engagement_rate": 0.0,
             "legacy_unknown_insights": 0, "partial_insights_posts": 0,
@@ -100,6 +140,8 @@ def calculate_content_summary(posts_list: list) -> dict:
         "total_comments": total_comments,
         "total_saves": total_saves,
         "total_shares": total_shares,
+        "total_interactions": total_interactions,
+        "total_reach": total_reach,
         "avg_likes": round(total_likes / total) if total else 0,
         "avg_comments": round(total_comments / total) if total else 0,
         "avg_reach": round(total_reach / total) if total else 0,
@@ -191,13 +233,13 @@ def data_quality_summary(stats_list: list, expected_days: int | None = None) -> 
     available_days = len(stats_list)
     missing_days = max(expected_days - available_days, 0) if expected_days is not None else None
     metric_names = ("reach", "follower_count", "views", "accounts_engaged")
-    presence = {
-        id(row): set(json.loads(row.metrics_present))
-        for row in stats_list
+    parsed_presence = {id(row): _metrics_present(row) for row in stats_list}
+    presence = {key: value for key, value in parsed_presence.items() if value is not None}
+    legacy_unknown_days = sum(1 for value in parsed_presence.values() if value is None)
+    invalid_metadata_days = sum(
+        1 for row in stats_list
         if getattr(row, "metrics_present", None) is not None
-    }
-    legacy_unknown_days = sum(
-        1 for row in stats_list if getattr(row, "metrics_present", None) is None
+        and parsed_presence[id(row)] is None
     )
     metric_missing_days = {
         metric: sum(
@@ -212,9 +254,11 @@ def data_quality_summary(stats_list: list, expected_days: int | None = None) -> 
         "missing_days": missing_days,
         "partial_days": partial_days,
         "legacy_unknown_days": legacy_unknown_days,
+        "invalid_metadata_days": invalid_metadata_days,
         "metric_missing_days": metric_missing_days,
         "complete": (
-            (missing_days in (0, None))
+            available_days > 0
+            and (missing_days in (0, None))
             and partial_days == 0
             and legacy_unknown_days == 0
             and not any(metric_missing_days.values())
@@ -223,6 +267,12 @@ def data_quality_summary(stats_list: list, expected_days: int | None = None) -> 
 
 
 def detect_trend(stats_list: list, metric: str = "followers", window: int = 7) -> str:
+    if not stats_list:
+        return "unknown"
+    if metric == "follower_count" and not all(
+        metric_is_present(row, metric) for row in stats_list
+    ):
+        return "unknown"
     if len(stats_list) < 2:
         return "stable"
     values = [getattr(s, metric, 0) for s in stats_list]

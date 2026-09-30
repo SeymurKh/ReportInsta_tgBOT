@@ -24,9 +24,10 @@ def _apply_lightweight_migrations(sync_conn) -> None:
     from sqlalchemy import inspect, text
 
     inspector = inspect(sync_conn)
+    existing_tables = set(inspector.get_table_names())
     existing_columns = {
         (table, col["name"])
-        for table in inspector.get_table_names()
+        for table in existing_tables
         for col in inspector.get_columns(table)
     }
     timestamp_type = "TIMESTAMP" if sync_conn.dialect.name == "postgresql" else "DATETIME"
@@ -43,6 +44,10 @@ def _apply_lightweight_migrations(sync_conn) -> None:
             f"ALTER TABLE accounts ADD COLUMN last_sync_at {timestamp_type}",
         ("accounts", "last_sync_error"):
             "ALTER TABLE accounts ADD COLUMN last_sync_error TEXT",
+        ("accounts", "current_followers"):
+            "ALTER TABLE accounts ADD COLUMN current_followers INTEGER",
+        ("accounts", "current_followers_at"):
+            f"ALTER TABLE accounts ADD COLUMN current_followers_at {timestamp_type}",
         ("daily_stats", "collected_at"):
             f"ALTER TABLE daily_stats ADD COLUMN collected_at {timestamp_type}",
         ("daily_stats", "is_partial"):
@@ -57,5 +62,5 @@ def _apply_lightweight_migrations(sync_conn) -> None:
             f"ALTER TABLE notification_deliveries ADD COLUMN expires_at {timestamp_type}",
     }
     for (table, column), ddl in migrations.items():
-        if (table, column) not in existing_columns:
+        if table in existing_tables and (table, column) not in existing_columns:
             sync_conn.execute(text(ddl))

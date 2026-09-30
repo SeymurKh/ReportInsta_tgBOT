@@ -64,11 +64,16 @@ def test_growth_zero_previous():
     assert calculate_growth(50, 0) == (50, None)
 
 
+def test_follower_trend_is_unknown_without_data():
+    assert detect_trend([], "follower_count") == "unknown"
+
+
 # ── calculate_period_summary ──
 
 def test_period_summary_empty():
     s = calculate_period_summary([])
-    assert s["followers_growth"] == 0
+    assert s["followers_growth"] is None
+    assert s["followers_growth_known"] is False
     assert s["reach_total"] == 0
 
 
@@ -81,6 +86,21 @@ def test_period_summary_values():
     assert s["followers_start"] == 90
     assert s["reach_total"] == 1200
     assert s["reach_avg_daily"] == 600
+
+
+def test_period_summary_does_not_report_percent_from_impossible_follower_baseline():
+    stats = [FakeStats(date(2026, 9, 29), followers=0, follower_count=23)]
+    s = calculate_period_summary(stats)
+    assert s["followers_growth"] == 23
+    assert s["followers_start"] is None
+    assert s["followers_growth_pct"] is None
+
+
+def test_period_summary_calculates_percent_from_valid_baseline():
+    stats = [FakeStats(date(2026, 9, 29), followers=208, follower_count=23)]
+    s = calculate_period_summary(stats)
+    assert s["followers_start"] == 185
+    assert s["followers_growth_pct"] == 12.4
 
 
 # ── calculate_content_summary ──
@@ -191,11 +211,26 @@ def test_daily_peaks_and_quality_summary():
     ]
     stats[0].is_partial = False
     stats[1].is_partial = True
+    stats[0].metrics_present = '["follower_count", "reach", "views", "accounts_engaged"]'
+    stats[1].metrics_present = '["follower_count", "reach", "views", "accounts_engaged"]'
     assert daily_peaks(stats)[0] == {
         "date": "2026-09-02", "metric": "reach", "value": 300,
     }
     quality = data_quality_summary(stats, expected_days=3)
     assert quality == {
         "available_days": 2, "expected_days": 3, "missing_days": 1,
-        "partial_days": 1, "complete": False,
+        "partial_days": 1, "legacy_unknown_days": 0, "invalid_metadata_days": 0,
+        "metric_missing_days": {
+            "reach": 0, "follower_count": 0, "views": 0, "accounts_engaged": 0,
+        },
+        "complete": False,
     }
+
+
+def test_corrupt_metric_metadata_is_reported_as_unknown_not_crashed():
+    row = FakeStats(date(2026, 9, 1))
+    row.metrics_present = "{invalid-json"
+    quality = data_quality_summary([row], expected_days=1)
+    assert quality["legacy_unknown_days"] == 1
+    assert quality["invalid_metadata_days"] == 1
+    assert quality["complete"] is False

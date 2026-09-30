@@ -54,7 +54,16 @@ async def fix_followers_history(
         next_row = rows[cursor]
         if row is None or next_row.metrics_present is None:
             break
-        if "follower_count" not in json.loads(next_row.metrics_present):
+        try:
+            metrics_present = json.loads(next_row.metrics_present)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Cannot rebuild follower history for account %s: invalid metrics metadata on %s",
+                account_id,
+                cursor,
+            )
+            break
+        if not isinstance(metrics_present, list) or "follower_count" not in metrics_present:
             break
         mapping[previous_date] = max(
             mapping[cursor] - (next_row.follower_count or 0), 0
@@ -68,7 +77,7 @@ def make_insights_filter(posts_cached: list, now: datetime):
     - new post (not in DB)          -> always fetch
     - age <= POSTS_HOT_DAYS         -> fetch every sync
     - age <= POSTS_WARM_DAYS        -> fetch at most once per POSTS_WARM_INTERVAL_HOURS
-    - older                         -> frozen (likes/comments still update for free)
+    - older                         -> fetch at most once per POSTS_COLD_INTERVAL_DAYS
     """
     cached = {p.instagram_media_id: p for p in posts_cached}
     hot = timedelta(days=settings.POSTS_HOT_DAYS)
@@ -90,7 +99,9 @@ def make_insights_filter(posts_cached: list, now: datetime):
         if age <= warm:
             last = existing.insights_updated_at
             return last is None or (now - last) >= warm_interval
-        return False
+        last = existing.insights_updated_at
+        cold_interval = timedelta(days=max(1, settings.POSTS_COLD_INTERVAL_DAYS))
+        return last is None or (now - last) >= cold_interval
 
     return should_refresh
 
@@ -128,16 +139,18 @@ async def sync_account_data(account, since_dt: datetime, until_dt: datetime) -> 
             await crud.update_account_sync_status(account.id, "failed", str(error))
             raise
         else:
+            partial_reason = "; ".join(result.get("partial_reasons", [])) or None
             await crud.finish_sync_run(
                 run_id,
                 "partial" if result.get("partial") else "success",
+                error=partial_reason,
                 api_delay_days=len(result.get("api_delay_dates", [])),
                 is_partial=bool(result.get("partial")),
             )
             await crud.update_account_sync_status(
                 account.id,
                 "partial" if result.get("partial") else "success",
-                None,
+                partial_reason,
             )
             return result
         finally:
@@ -194,6 +207,7 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
     refresh_posts = until_dt >= freshness_cutoff or not posts_cached
 
     partial = False
+    partial_reasons: list[str] = []
     user_info: dict = {}
     today_followers_delta = None
 
@@ -206,6 +220,8 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
                 )
                 user_info = snapshot["user_info"]
                 partial = partial or snapshot.get("partial", False)
+                if snapshot.get("partial"):
+                    partial_reasons.append("неполные дневные Insights")
                 partial_days = set(snapshot.get("partial_days", []))
                 metric_presence = snapshot.get("metric_presence", {})
                 for day_str, metrics in snapshot["insights"].items():
@@ -232,8 +248,14 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
                 except Exception as e:
                     logger.warning(f"user_info fetch failed for @{account.username}: {e}")
                     partial = True
+                    partial_reasons.append("не удалось получить профильные поля")
 
             if user_info.get("followers_count") is not None:
+                await crud.update_current_followers(
+                    account.id, user_info["followers_count"], now
+                )
+                account.current_followers = user_info["followers_count"]
+                account.current_followers_at = now
                 try:
                     today_followers_delta = await client.get_current_day_follower_change(now)
                 except Exception as error:
@@ -243,6 +265,18 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
                     )
                 if today_followers_delta is None:
                     partial = True
+                    partial_reasons.append("Instagram не вернул дневной прирост подписчиков")
+                    logger.warning(
+                        "Daily follower delta missing for @%s; current total was saved",
+                        account.username,
+                    )
+            else:
+                partial = True
+                partial_reasons.append("Instagram не вернул общий счётчик подписчиков")
+                logger.warning(
+                    "Current follower total missing from profile response for @%s",
+                    account.username,
+                )
 
             if refresh_posts:
                 insights_filter = make_insights_filter(posts_cached, now)
@@ -250,6 +284,8 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
                     since_dt, until_dt, insights_filter=insights_filter
                 )
                 partial = partial or posts_partial
+                if posts_partial:
+                    partial_reasons.append("часть Insights публикаций недоступна")
                 for p in posts_data:
                     p["account_id"] = account.id
                 await crud.save_posts(posts_data)
@@ -261,20 +297,17 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
         finally:
             await client.close()
 
-    # Store the current total against today's partial follower delta. This
-    # prevents today's total from being assigned to yesterday's row.
-    if user_info.get("followers_count") is not None and today_followers_delta is not None:
+    # A profile total is useful even when the separate daily-delta metric is absent.
+    if user_info.get("followers_count") is not None:
         today = now.date()
-        await crud.save_daily_stats(
+        await crud.save_follower_snapshot(
             account_id=account.id,
             stats_date=today,
             followers=user_info["followers_count"],
-            following=None,
-            media_count=None,
-            reach=None,
-            follower_count=today_followers_delta,
+            daily_delta=today_followers_delta,
             collected_at=now,
-            is_partial=True,
+            following=user_info.get("follows_count"),
+            media_count=user_info.get("media_count"),
         )
         await fix_followers_history(account.id, user_info["followers_count"], today)
 
@@ -290,8 +323,18 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
             api_delay_dates.append(d)
         else:
             logger.error(f"BUG: Data missing outside API delay window: {d} (@{account.username})")
+            partial = True
+            partial_reasons.append(f"отсутствуют дневные данные за {d.isoformat()}")
+
+    if partial_reasons:
+        logger.warning(
+            "Sync for @%s completed with partial data: %s",
+            account.username,
+            "; ".join(dict.fromkeys(partial_reasons)),
+        )
 
     return {
         "api_delay_dates": [d.strftime("%d.%m") for d in api_delay_dates],
         "partial": partial,
+        "partial_reasons": list(dict.fromkeys(partial_reasons)),
     }

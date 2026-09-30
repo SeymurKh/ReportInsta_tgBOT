@@ -22,8 +22,12 @@ def _to_bytes(fig) -> bytes:
 
 def create_followers_chart(dates: list, followers: list) -> bytes:
     fig, ax = plt.subplots()
-    colors = ["#4CAF50" if v >= 0 else "#F44336" for v in followers]
-    ax.bar(dates, followers, color=colors, alpha=0.8)
+    available = [(day, value) for day, value in zip(dates, followers) if value is not None]
+    colors = ["#4CAF50" if value >= 0 else "#F44336" for _, value in available]
+    if available:
+        ax.bar([day for day, _ in available], [value for _, value in available], color=colors, alpha=0.8)
+    else:
+        ax.text(0.5, 0.5, "Нет полных данных", ha="center", va="center", transform=ax.transAxes)
     ax.axhline(y=0, color="gray", linestyle="-", alpha=0.3)
     ax.set_title("Прирост подписчиков по дням", fontsize=14, fontweight="bold")
     ax.set_ylabel("Прирост")
@@ -88,8 +92,10 @@ def create_comparison_chart(labels: list[str], p1_values: list, p2_values: list,
     fig, ax = plt.subplots()
     x = np.arange(len(labels))
     width = 0.35
-    ax.bar(x - width / 2, p1_values, width, label=p1_name, color=settings.CHART_COLORS[0], alpha=0.85)
-    ax.bar(x + width / 2, p2_values, width, label=p2_name, color=settings.CHART_COLORS[1], alpha=0.85)
+    values1 = np.array([np.nan if value is None else value for value in p1_values], dtype=float)
+    values2 = np.array([np.nan if value is None else value for value in p2_values], dtype=float)
+    ax.bar(x - width / 2, values1, width, label=p1_name, color=settings.CHART_COLORS[0], alpha=0.85)
+    ax.bar(x + width / 2, values2, width, label=p2_name, color=settings.CHART_COLORS[1], alpha=0.85)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=10)
     ax.set_title("Сравнение периодов", fontsize=14, fontweight="bold")

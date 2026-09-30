@@ -120,10 +120,15 @@ def test_comparison_rejects_overlapping_periods_before_api_call():
 
 
 def test_full_report_pipeline_builds_context_from_mocked_data():
-    account = SimpleNamespace(id=1, username="demo", name="Demo")
+    account = SimpleNamespace(
+        id=1, username="demo", name="Demo", current_followers=1234,
+        current_followers_at=datetime(2026, 9, 1, 12, 0),
+    )
     stats = [SimpleNamespace(
         date=date(2026, 9, 1), followers=100, follower_count=3,
         reach=500, views=900, accounts_engaged=40, is_partial=False,
+        metrics_present='["follower_count", "reach", "views", "accounts_engaged"]',
+        collected_at=datetime(2026, 9, 1, 12, 0),
     )]
     post = SimpleNamespace(
         media_type="REELS", caption="A useful post", permalink="https://example.test/p",
@@ -143,6 +148,7 @@ def test_full_report_pipeline_builds_context_from_mocked_data():
              patch("reports.generator._refresh_stories_if_recent", new=AsyncMock()), \
              patch("reports.generator.get_analyzer", return_value=None), \
              patch("reports.generator.crud.get_daily_stats", new=AsyncMock(return_value=stats)), \
+             patch("reports.generator.crud.get_latest_stats", new=AsyncMock(return_value=stats[-1])), \
              patch("reports.generator.crud.get_posts", new=AsyncMock(return_value=[post])), \
              patch("reports.generator.crud.get_stories", new=AsyncMock(return_value=[story])), \
              patch("reports.generator.create_followers_chart", return_value=b"followers"), \
@@ -153,9 +159,31 @@ def test_full_report_pipeline_builds_context_from_mocked_data():
     result = asyncio.run(run())
     context = result["context"]
     assert result["text"]
+    assert "Текущие: 1 234" in result["text"]
     assert context["content"]["total_posts"] == 1
     assert context["top_posts"][0]["media_type"] == "REELS"
     assert context["format_performance"]["REELS"]["posts"] == 1
     assert context["data_quality"]["complete"] is True
     assert set(result["charts"]) == {"followers", "reach", "stories"}
+
+
+def test_comparison_report_handles_unknown_follower_growth():
+    account = SimpleNamespace(id=1, username="demo", name="Demo")
+
+    async def run():
+        with patch("reports.generator._fetch_and_save_data", new=AsyncMock(return_value={"api_delay_dates": [], "partial": False})), \
+             patch("reports.generator._refresh_stories_if_recent", new=AsyncMock()), \
+             patch("reports.generator.get_analyzer", return_value=None), \
+             patch("reports.generator.crud.get_daily_stats", new=AsyncMock(return_value=[])), \
+             patch("reports.generator.crud.get_posts", new=AsyncMock(return_value=[])), \
+             patch("reports.generator.crud.get_stories", new=AsyncMock(return_value=[])):
+            return await generate_comparison_periods_report(
+                account,
+                date(2026, 9, 1), date(2026, 9, 7),
+                date(2026, 9, 8), date(2026, 9, 14),
+            )
+
+    result = asyncio.run(run())
+    assert result["context"]["period1"]["stats"]["followers_growth"] is None
+    assert "Прирост подписчиков: н/д (неполные данные)" in result["text"]
 

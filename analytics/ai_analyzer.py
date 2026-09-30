@@ -94,23 +94,26 @@ class AIAnalyzer:
                     f"; неполные Insights сторис: {stories_summary.get('partial_insights_stories', 0)}; "
                     f"старые сторис с неизвестной полнотой: {stories_summary.get('legacy_unknown_insights', 0)}"
                 )
+        current_followers = stats_summary.get("followers_current")
+        follower_growth = stats_summary.get("followers_growth")
+        follower_growth_pct = stats_summary.get("followers_growth_pct")
         prompt = f"""Проанализируй Instagram-аккаунт за период {period}.
 
 ДАННЫЕ:
-- Подписчики на конец: {stats_summary.get('followers_end', 0)}; прирост: {stats_summary.get('followers_growth', 0)} ({stats_summary.get('followers_growth_pct', 0)}%)
+- Подписчики сейчас: {current_followers if current_followers is not None else 'н/д'}; прирост за период: {follower_growth if follower_growth is not None else 'н/д'} ({follower_growth_pct if follower_growth_pct is not None else 'н/д'}%)
 - Охват: {stats_summary.get('reach_total', 0)}; просмотры: {stats_summary.get('views_total', 'н/д')}; вовлечено: {stats_summary.get('accounts_engaged_total', 'н/д')}
 - Контент: {content_summary.get('total_posts', 0)} публикаций; Reels {content_summary.get('total_reels', 0)}; видео {content_summary.get('total_videos', 0)}; фото {content_summary.get('total_images', 0)}; карусели {content_summary.get('total_carousels', 0)}
-- Средние значения: лайки {content_summary.get('avg_likes', 0)}; охват {content_summary.get('avg_reach', 0)}; ER {content_summary.get('engagement_rate', 0)}%
+- Средние значения: лайки {content_summary.get('avg_likes', 0)}; охват {content_summary.get('avg_reach', 0)}; ER {content_summary.get('engagement_rate', 0)}% (total_interactions Insights {content_summary.get('total_interactions', 'н/д')} / суммарный охват публикаций {content_summary.get('total_reach', 'н/д')})
 - {stories_line}
 - Качество данных:{quality_line or ' не указано'}
-- Лучший пост: {best_post_info}
-- Наблюдаемый тренд: {trend}
+- Лучший пост (по оценочному баллу: лайки + 2×комментарии + 3×сохранения + 4×репосты на охват; он не обязательно имеет максимальный охват): {best_post_info}
+- Краткосрочный тренд (сравнение соседних окон максимум по 7 дней, не прирост за весь период): {trend}
 
 ФОРМАТ: максимум 8 коротких строк.
 1) 2–3 вывода с цифрами.
 2) Сильная сторона и слабая сторона.
 3) Ровно 2 действия: что сделать, в каком приоритете и на какой показатель это должно повлиять.
-Не пересказывай входные данные и не добавляй вступление."""
+Не пересказывай входные данные и не добавляй вступление. Не называй охват выбранного лучшего поста слабым только потому, что он ниже среднего: пост выбран по оценочному баллу взаимодействий с учётом охвата. Не трактуй краткосрочное снижение как отрицательный прирост за весь период. Если показатели противоречат друг другу или их база расчёта различается, отметь это вместо вывода причины."""
         return await self._call_openai(prompt, max_tokens=700)
 
     async def analyze_comparison(self, accounts_summary: str) -> str:
