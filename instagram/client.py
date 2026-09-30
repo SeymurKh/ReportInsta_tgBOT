@@ -141,16 +141,35 @@ class InstagramClient:
         return await self._request(url, params)
 
 
-    async def get_account_insights(self, since: int, until: int) -> dict:
+    async def get_account_insights(
+        self, since: int, until: int, metrics: list[str] | None = None
+    ) -> dict:
         """Old-format metrics (reach, follower_count) for the whole range."""
         url = f"{self.base_url}/{self.user_id}/insights"
         params = {
-            "metric": ",".join(ACCOUNT_METRICS_OLD),
+            "metric": ",".join(metrics or ACCOUNT_METRICS_OLD),
             "period": "day",
             "since": str(since),
             "until": str(until),
         }
         return await self._request(url, params)
+
+    async def get_current_day_follower_change(self, now: datetime | None = None) -> int | None:
+        """Fetch today's follower delta so current totals are anchored to today."""
+        current = now or utc_now_naive()
+        start = datetime(current.year, current.month, current.day, tzinfo=timezone.utc)
+        data = await self.get_account_insights(
+            int(start.timestamp()),
+            int(current.replace(tzinfo=timezone.utc).timestamp()),
+            metrics=["follower_count"],
+        )
+        for item in data.get("data", []):
+            if item.get("name") != "follower_count":
+                continue
+            values = item.get("values", [])
+            if values:
+                return values[-1].get("value")
+        return None
 
     async def get_account_insights_new_metrics_day(self, day_start: int, day_end: int) -> dict:
         """New-format metrics (views, accounts_engaged) for a single day."""
@@ -265,6 +284,8 @@ class InstagramClient:
         insights_raw = await self.get_account_insights(since, until)
 
         insights: dict[str, dict] = {}
+        metric_presence: dict[str, set[str]] = {}
+        partial_days: set[str] = set()
 
         # Parse old format metrics (reach, follower_count) — values[] array
         for item in insights_raw.get("data", []):
@@ -276,6 +297,7 @@ class InstagramClient:
                 dt = parse_ig_timestamp(end_time)
                 day = dt.strftime("%Y-%m-%d")
                 insights.setdefault(day, {})[name] = val.get("value", 0)
+                metric_presence.setdefault(day, set()).add(name)
 
         # New-format metrics (views, accounts_engaged) — one request per day,
         # parallelized in small batches
@@ -300,8 +322,10 @@ class InstagramClient:
                         name = item.get("name")
                         value = item.get("total_value", {}).get("value", 0)
                         insights.setdefault(day_str, {})[name] = value
+                        metric_presence.setdefault(day_str, set()).add(name)
                 except Exception as e:
                     logger.warning(f"Failed to get new metrics for {day_str}: {e}")
+                    partial_days.add(day_str)
                     return False
             return True
 
@@ -311,7 +335,13 @@ class InstagramClient:
         else:
             partial = False
 
-        return {"user_info": user_info, "insights": insights, "partial": partial}
+        return {
+            "user_info": user_info,
+            "insights": insights,
+            "metric_presence": {day: sorted(names) for day, names in metric_presence.items()},
+            "partial_days": sorted(partial_days),
+            "partial": partial,
+        }
 
     async def collect_posts_with_insights(
         self, date_from: datetime, date_to: datetime,
@@ -389,6 +419,7 @@ class InstagramClient:
                 "total_interactions": insights.get("total_interactions"),
                 "views": insights.get("views"),
                 "skip_insights": not fetch_insights,
+                "insights_present": sorted(insights) if fetch_insights else None,
             })
         return posts, partial
 

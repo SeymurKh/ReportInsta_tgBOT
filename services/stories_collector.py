@@ -90,8 +90,7 @@ async def collect_stories_for_account(account, bot: Bot | None = None) -> int:
     async def refresh_one(story):
         async with semaphore:
             metrics = await client.get_story_insights(story.instagram_media_id)
-            if metrics:
-                await crud.update_story_insights(story.instagram_media_id, metrics)
+            await crud.update_story_insights(story.instagram_media_id, metrics)
 
     if fresh:
         results = await asyncio.gather(

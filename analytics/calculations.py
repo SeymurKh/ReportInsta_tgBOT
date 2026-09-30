@@ -1,5 +1,6 @@
 from datetime import date
 from typing import Optional
+import json
 
 
 def calculate_growth(current: int, previous: int) -> tuple[int, Optional[float]]:
@@ -53,6 +54,8 @@ def calculate_content_summary(posts_list: list) -> dict:
             "total_likes": 0, "total_comments": 0, "total_saves": 0, "total_shares": 0,
             "avg_likes": 0, "avg_comments": 0, "avg_reach": 0,
             "engagement_rate": 0.0,
+            "legacy_unknown_insights": 0, "partial_insights_posts": 0,
+            "missing_insight_metrics": {},
         }
 
     total = len(posts_list)
@@ -67,6 +70,23 @@ def calculate_content_summary(posts_list: list) -> dict:
     total_shares = sum(p.shares for p in posts_list)
     total_reach = sum(p.reach for p in posts_list)
     total_interactions = sum(p.total_interactions for p in posts_list)
+
+    expected_metrics = {
+        "IMAGE": {"reach", "saved", "total_interactions"},
+        "VIDEO": {"reach", "saved", "shares", "total_interactions", "views"},
+        "REELS": {"reach", "saved", "shares", "total_interactions", "views"},
+        "CAROUSEL_ALBUM": {"reach", "saved", "shares", "total_interactions"},
+    }
+    known_posts = [p for p in posts_list if getattr(p, "insights_present", None) is not None]
+    missing_insight_metrics = {name: 0 for name in {m for group in expected_metrics.values() for m in group}}
+    partial_insights_posts = 0
+    for post in known_posts:
+        present = set(json.loads(post.insights_present))
+        missing = expected_metrics.get(post.media_type, expected_metrics["IMAGE"]) - present
+        if missing:
+            partial_insights_posts += 1
+            for metric in missing:
+                missing_insight_metrics[metric] += 1
 
     er = (total_interactions / total_reach * 100) if total_reach > 0 else 0.0
 
@@ -84,6 +104,11 @@ def calculate_content_summary(posts_list: list) -> dict:
         "avg_comments": round(total_comments / total) if total else 0,
         "avg_reach": round(total_reach / total) if total else 0,
         "engagement_rate": round(er, 1),
+        "legacy_unknown_insights": len(posts_list) - len(known_posts),
+        "partial_insights_posts": partial_insights_posts,
+        "missing_insight_metrics": {
+            metric: count for metric, count in missing_insight_metrics.items() if count
+        },
     }
 
 
@@ -165,13 +190,35 @@ def data_quality_summary(stats_list: list, expected_days: int | None = None) -> 
     partial_days = sum(1 for row in stats_list if getattr(row, "is_partial", False))
     available_days = len(stats_list)
     missing_days = max(expected_days - available_days, 0) if expected_days is not None else None
+    metric_names = ("reach", "follower_count", "views", "accounts_engaged")
+    presence = {
+        id(row): set(json.loads(row.metrics_present))
+        for row in stats_list
+        if getattr(row, "metrics_present", None) is not None
+    }
+    legacy_unknown_days = sum(
+        1 for row in stats_list if getattr(row, "metrics_present", None) is None
+    )
+    metric_missing_days = {
+        metric: sum(
+            1 for row in stats_list
+            if id(row) in presence and metric not in presence[id(row)]
+        )
+        for metric in metric_names
+    }
     return {
         "available_days": available_days,
         "expected_days": expected_days,
         "missing_days": missing_days,
         "partial_days": partial_days,
-        "complete": (missing_days == 0 and partial_days == 0)
-        if expected_days is not None else partial_days == 0,
+        "legacy_unknown_days": legacy_unknown_days,
+        "metric_missing_days": metric_missing_days,
+        "complete": (
+            (missing_days in (0, None))
+            and partial_days == 0
+            and legacy_unknown_days == 0
+            and not any(metric_missing_days.values())
+        ),
     }
 
 
@@ -205,6 +252,8 @@ def calculate_stories_summary(stories_list: list) -> dict:
             "total_profile_activity": 0, "total_follows": 0,
             "avg_views": 0, "avg_reach": 0,
             "exit_rate": 0.0, "tap_forward_total": 0, "tap_back_total": 0,
+            "legacy_unknown_insights": 0, "partial_insights_stories": 0,
+            "missing_insight_metrics": {},
         }
 
     total = len(stories_list)
@@ -212,6 +261,19 @@ def calculate_stories_summary(stories_list: list) -> dict:
     total_reach = sum(s.reach for s in stories_list)
     total_exits = sum(s.tap_exit + s.swipe_forward for s in stories_list)
     exit_rate = round(total_exits / total_views * 100, 1) if total_views > 0 else 0.0
+    known_stories = [s for s in stories_list if getattr(s, "metrics_present", None) is not None]
+    story_metric_names = {
+        "views", "reach", "replies", "shares", "total_interactions", "profile_activity",
+        "follows", "tap_forward", "tap_back", "tap_exit", "swipe_forward",
+    }
+    missing_insight_metrics = {name: 0 for name in story_metric_names}
+    partial_insights_stories = 0
+    for story in known_stories:
+        missing = story_metric_names - set(json.loads(story.metrics_present))
+        if missing:
+            partial_insights_stories += 1
+            for metric in missing:
+                missing_insight_metrics[metric] += 1
 
     return {
         "total_stories": total,
@@ -228,6 +290,11 @@ def calculate_stories_summary(stories_list: list) -> dict:
         "exit_rate": exit_rate,
         "tap_forward_total": sum(s.tap_forward for s in stories_list),
         "tap_back_total": sum(s.tap_back for s in stories_list),
+        "legacy_unknown_insights": len(stories_list) - len(known_stories),
+        "partial_insights_stories": partial_insights_stories,
+        "missing_insight_metrics": {
+            metric: count for metric, count in missing_insight_metrics.items() if count
+        },
     }
 
 

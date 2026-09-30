@@ -60,6 +60,13 @@ def format_context_for_ai(context: dict) -> str:
         lines.append(f"\nПериод 2 ({p2.get('name', '')}):")
         lines.append(f"  Подписчики: {s2.get('followers_end', 0)}, Охват: {s2.get('reach_total', 0)}, "
                      f"Просмотры: {s2.get('views_total', 0)}, ER: {c2.get('engagement_rate', 0)}%")
+        period_days = context.get("period_days", {})
+        if period_days:
+            lines.append(
+                f"\nДоступность: период 1 {period_days.get('available1', 0)} "
+                f"из {period_days.get('period1', 0)} дней; период 2 "
+                f"{period_days.get('available2', 0)} из {period_days.get('period2', 0)} дней"
+            )
 
         # Stories per period (if present)
         st1 = p1.get("stories", {})
@@ -104,6 +111,30 @@ def format_context_for_ai(context: dict) -> str:
                      f"Фото: {content.get('total_images', 0)}, Карусели: {content.get('total_carousels', 0)})")
         lines.append(f"Ср. лайки: {content.get('avg_likes', 0)} | Ср. охват: {content.get('avg_reach', 0)}")
         lines.append(f"ER: {content.get('engagement_rate', 0)}%")
+        if content.get("partial_insights_posts") or content.get("legacy_unknown_insights"):
+            lines.append(
+                f"Полнота Insights публикаций: неполных {content.get('partial_insights_posts', 0)}, "
+                f"старых неизвестных {content.get('legacy_unknown_insights', 0)}"
+            )
+
+    quality = context.get("data_quality")
+    if quality:
+        lines.append(
+            f"\nКачество данных: доступно {quality['available_days']} дн. "
+            f"из {quality.get('expected_days', 'н/д')}, "
+            f"частично загружено {quality['partial_days']} дн."
+        )
+        gaps = [
+            f"{metric} — {days}"
+            for metric, days in quality.get("metric_missing_days", {}).items()
+            if days
+        ]
+        if gaps:
+            lines.append("Отсутствующие метрики по дням: " + ", ".join(gaps))
+        if quality.get("legacy_unknown_days"):
+            lines.append(
+                f"Для {quality['legacy_unknown_days']} старых дней API-полнота неизвестна."
+            )
 
         # Daily stats
         daily = context.get("daily_stats", [])
@@ -132,6 +163,11 @@ def format_context_for_ai(context: dict) -> str:
                          f"(ср. {stories['avg_views']}), охват {stories['total_reach']}, "
                          f"ответы {stories['total_replies']}, репосты {stories['total_shares']}, "
                          f"выходы {stories['exit_rate']}%")
+            if stories.get("partial_insights_stories") or stories.get("legacy_unknown_insights"):
+                lines.append(
+                    f"Полнота Insights сторис: неполных {stories.get('partial_insights_stories', 0)}, "
+                    f"старых неизвестных {stories.get('legacy_unknown_insights', 0)}"
+                )
             for s in context.get("stories_list", [])[:20]:
                 lines.append(f"  {s['date']}: 👁{s['views']} охват:{s['reach']} "
                              f"💬{s['replies']} 📤{s['shares']}")
@@ -158,14 +194,6 @@ def format_context_for_ai(context: dict) -> str:
                 f"  {media_type}: {values['posts']} публикаций, "
                 f"средний охват {values['reach_avg']}, ER {values['engagement_rate']}%"
             )
-
-    quality = context.get("data_quality")
-    if quality:
-        lines.append(
-            f"\nКачество данных: доступно {quality['available_days']} дн. "
-            f"из {quality.get('expected_days', 'н/д')}, "
-            f"частично загружено {quality['partial_days']} дн."
-        )
 
     # Keep repeated dialogue requests fast and leave the model room to answer.
     return truncate_text("\n".join(lines), 14000)

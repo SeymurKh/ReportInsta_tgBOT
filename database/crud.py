@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 import logging
+import json
 
 from sqlalchemy import select, update, and_, text
 from sqlalchemy.exc import IntegrityError
@@ -182,6 +183,26 @@ async def release_sync_lease(account_id: int, owner: str, sync_type: str = "full
         await session.commit()
 
 
+async def renew_sync_lease(
+    account_id: int, owner: str, ttl_seconds: int = 7200, sync_type: str = "full"
+) -> bool:
+    """Extend a live lease only while it is still owned by this sync run."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    async with async_session_factory() as session:
+        result = await session.execute(
+            update(SyncLease)
+            .where(
+                SyncLease.account_id == account_id,
+                SyncLease.sync_type == sync_type,
+                SyncLease.owner == owner,
+                SyncLease.expires_at > now,
+            )
+            .values(expires_at=now + timedelta(seconds=ttl_seconds))
+        )
+        await session.commit()
+        return result.rowcount == 1
+
+
 async def claim_notification_delivery(
     delivery_key: str,
     notification_type: str,
@@ -191,18 +212,43 @@ async def claim_notification_delivery(
 
     A unique constraint makes this safe when two scheduler instances race.
     """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    expires_at = now + timedelta(minutes=10)
     async with async_session_factory() as session:
         session.add(NotificationDelivery(
             delivery_key=delivery_key,
             notification_type=notification_type,
             recipient_id=str(recipient_id),
+            status="pending",
+            claimed_at=now,
+            expires_at=expires_at,
         ))
         try:
             await session.commit()
         except IntegrityError:
             await session.rollback()
-            return False
+            result = await session.execute(
+                update(NotificationDelivery)
+                .where(
+                    NotificationDelivery.delivery_key == delivery_key,
+                    NotificationDelivery.status == "pending",
+                    NotificationDelivery.expires_at <= now,
+                )
+                .values(claimed_at=now, expires_at=expires_at)
+            )
+            await session.commit()
+            return result.rowcount == 1
         return True
+
+
+async def complete_notification_delivery(delivery_key: str) -> None:
+    async with async_session_factory() as session:
+        await session.execute(
+            update(NotificationDelivery)
+            .where(NotificationDelivery.delivery_key == delivery_key)
+            .values(status="sent", sent_at=datetime.now(timezone.utc).replace(tzinfo=None))
+        )
+        await session.commit()
 
 
 async def release_notification_delivery(delivery_key: str) -> None:
@@ -229,6 +275,7 @@ async def save_daily_stats(
     accounts_engaged: int | None = None,
     collected_at: datetime | None = None,
     is_partial: bool | None = None,
+    metrics_present: list[str] | None = None,
 ) -> None:
     async with async_session_factory() as session:
         existing = await session.execute(
@@ -252,6 +299,8 @@ async def save_daily_stats(
             }.items():
                 if value is not None:
                     setattr(row, field, value)
+            if metrics_present is not None:
+                row.metrics_present = json.dumps(sorted(set(metrics_present)))
         else:
             session.add(DailyStats(
                 account_id=account_id, date=stats_date,
@@ -261,6 +310,8 @@ async def save_daily_stats(
                 views=views or 0, accounts_engaged=accounts_engaged or 0,
                 collected_at=collected_at,
                 is_partial=bool(is_partial),
+                metrics_present=(json.dumps(sorted(set(metrics_present)))
+                                 if metrics_present is not None else None),
             ))
 
         await session.commit()
@@ -362,6 +413,8 @@ async def save_posts(posts_data: list[dict]) -> None:
                             insights_updated = True
                     if insights_updated:
                         row.insights_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                    if post.get("insights_present") is not None:
+                        row.insights_present = json.dumps(sorted(set(post["insights_present"])))
             else:
                 post["caption"] = post.get("caption") or ""
                 post["permalink"] = post.get("permalink") or ""
@@ -375,6 +428,8 @@ async def save_posts(posts_data: list[dict]) -> None:
                     post[field] = post.get(field) or 0
                 if not skip_insights and has_insights:
                     post["insights_updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
+                if post.get("insights_present") is not None:
+                    post["insights_present"] = json.dumps(sorted(set(post["insights_present"])))
                 session.add(Post(**post))
 
         await session.commit()
@@ -512,6 +567,7 @@ async def update_story_insights(instagram_media_id: str, metrics: dict) -> None:
             value = metrics.get(field)
             if value is not None:
                 setattr(row, field, max(getattr(row, field) or 0, value))
+        row.metrics_present = json.dumps(sorted(set(metrics)))
         row.insights_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await session.commit()
 

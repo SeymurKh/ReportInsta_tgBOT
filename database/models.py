@@ -47,6 +47,7 @@ class DailyStats(Base):
     accounts_engaged = Column(Integer, default=0)  # unique accounts interacted
     collected_at = Column(DateTime, nullable=True)  # naive UTC
     is_partial = Column(Boolean, default=False, nullable=False)
+    metrics_present = Column(Text, nullable=True)  # JSON list; NULL means legacy/unknown
 
     __table_args__ = (
         UniqueConstraint("account_id", "date", name="uq_account_date"),
@@ -82,6 +83,7 @@ class Post(Base):
     # were last refreshed from the API. None = never. Used by the tiered
     # refresh logic in services/data_sync.py. Naive UTC.
     insights_updated_at = Column(DateTime, nullable=True)
+    insights_present = Column(Text, nullable=True)  # JSON list; NULL means legacy/unknown
 
     account = relationship("Account", back_populates="posts")
 
@@ -121,6 +123,7 @@ class Story(Base):
 
     is_active = Column(Boolean, default=True)
     insights_updated_at = Column(DateTime, nullable=True)
+    metrics_present = Column(Text, nullable=True)  # JSON list; NULL means legacy/unknown
 
     account = relationship("Account", back_populates="stories")
 
@@ -135,6 +138,9 @@ class NotificationDelivery(Base):
     notification_type = Column(String(64), nullable=False)
     recipient_id = Column(String(64), nullable=False)
     sent_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    status = Column(String(16), default="pending", nullable=False)
+    claimed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
 
 
 class SyncRun(Base):

@@ -160,6 +160,9 @@ async def generate_report(
     stats_summary = calculate_period_summary(stats_list)
     content_summary = calculate_content_summary(posts_list)
     stories_summary = calculate_stories_summary(stories_list)
+    data_quality = data_quality_summary(
+        stats_list, expected_days=(date_to - date_from).days + 1
+    )
 
     best = get_best_post(posts_list)
     best_info = "нет данных"
@@ -179,6 +182,7 @@ async def generate_report(
         ai_analysis = await analyzer.analyze_account(
             period_str, stats_summary, content_summary, best_info, trend,
             stories_summary=stories_summary,
+            data_quality=data_quality,
         )
     else:
         ai_analysis = AI_UNAVAILABLE_TEXT
@@ -240,6 +244,30 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
 {ai_analysis}"""
 
     report_text += _warnings_block(fetch_info["api_delay_dates"], fetch_info["partial"])
+    metric_gaps = [
+        f"{metric}: {missing} дн. без метрики"
+        for metric, missing in data_quality["metric_missing_days"].items()
+        if missing
+    ]
+    if metric_gaps or data_quality["legacy_unknown_days"]:
+        report_text += "\n\nℹ️ Полнота метрик: " + "; ".join(
+            metric_gaps or ["в новых ответах API известных пропусков нет"]
+        )
+        if data_quality["legacy_unknown_days"]:
+            report_text += (
+                f"; у {data_quality['legacy_unknown_days']} старых дн. "
+                "нет сведений о том, какие метрики вернул API"
+            )
+    if content_summary["partial_insights_posts"] or content_summary["legacy_unknown_insights"]:
+        report_text += (
+            f"\nℹ️ Insights публикаций: неполных — {content_summary['partial_insights_posts']}; "
+            f"старых с неизвестной полнотой — {content_summary['legacy_unknown_insights']}"
+        )
+    if stories_summary["partial_insights_stories"] or stories_summary["legacy_unknown_insights"]:
+        report_text += (
+            f"\nℹ️ Insights сторис: неполных — {stories_summary['partial_insights_stories']}; "
+            f"старых с неизвестной полнотой — {stories_summary['legacy_unknown_insights']}"
+        )
 
 
     charts = {}
@@ -291,9 +319,7 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
         "top_posts": top_posts_by_metric(posts_list),
         "format_performance": compare_content_formats(posts_list),
         "daily_peaks": daily_peaks(stats_list),
-        "data_quality": data_quality_summary(
-            stats_list, expected_days=(date_to - date_from).days + 1
-        ),
+        "data_quality": data_quality,
         "ai_analysis": ai_analysis,
     }
 
@@ -454,19 +480,21 @@ async def generate_comparison_periods_report(
     lines.append(f"\n🤖 AI-сравнение\n{ai_analysis}")
     text = "\n".join(lines) + _warnings_block(api_delay_dates, partial)
 
+    chart_metrics = [
+        ("followers_growth", "Прирост подписчиков", s1["followers_growth"], s2["followers_growth"]),
+        ("reach", "Охват", s1["reach_total"], s2["reach_total"]),
+        ("views", "Просмотры", s1["views_total"], s2["views_total"]),
+        ("posts", "Публикации", c1["total_posts"], c2["total_posts"]),
+        ("stories", "Сторис", st1["total_stories"], st2["total_stories"]),
+        ("reach_daily", "Охват в день", p1_reach_daily, p2_reach_daily),
+        ("views_daily", "Просмотры в день", p1_views_daily, p2_views_daily),
+        ("engaged_daily", "Вовлечено в день", p1_engaged_daily, p2_engaged_daily),
+    ]
     charts = {
-        "comparison_totals": create_comparison_chart(
-        ["Подписчики", "Охват", "Просмотры", "Посты", "Сторис"],
-        [s1["followers_growth"], s1["reach_total"], s1["views_total"], c1["total_posts"], st1["total_stories"]],
-        [s2["followers_growth"], s2["reach_total"], s2["views_total"], c2["total_posts"], st2["total_stories"]],
-        p1_str, p2_str,
-        ),
-        "comparison_daily": create_comparison_chart(
-            ["Охват / день", "Просмотры / день", "Вовлечённость / день"],
-            [p1_reach_daily, p1_views_daily, p1_engaged_daily],
-            [p2_reach_daily, p2_views_daily, p2_engaged_daily],
-            p1_str, p2_str,
-        ),
+        f"comparison_{key}": create_comparison_chart(
+            [label], [value1], [value2], p1_str, p2_str
+        )
+        for key, label, value1, value2 in chart_metrics
     }
 
     context = {

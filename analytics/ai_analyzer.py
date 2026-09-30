@@ -62,6 +62,7 @@ class AIAnalyzer:
     async def analyze_account(
         self, period: str, stats_summary: dict, content_summary: dict,
         best_post_info: str, trend: str, stories_summary: dict | None = None,
+        data_quality: dict | None = None,
     ) -> str:
         stories_line = "Сторис: нет данных"
         if stories_summary and stories_summary.get("total_stories"):
@@ -70,6 +71,29 @@ class AIAnalyzer:
                 f"(ср. {stories_summary['avg_views']}), охват {stories_summary['total_reach']}, "
                 f"ответы {stories_summary['total_replies']}, выходы {stories_summary['exit_rate']}%"
             )
+        quality_line = ""
+        if data_quality:
+            missing = data_quality.get("metric_missing_days", {})
+            missing_text = ", ".join(
+                f"{name}: {count} дн." for name, count in missing.items() if count
+            )
+            quality_line = (
+                f"\n- Полнота: {data_quality.get('available_days', 0)} "
+                f"из {data_quality.get('expected_days', 'н/д')} дней; "
+                f"неполные дни: {data_quality.get('partial_days', 0)}; "
+                f"старые дни с неизвестной полнотой: {data_quality.get('legacy_unknown_days', 0)}; "
+                f"отсутствующие метрики: {missing_text or 'нет известных пропусков'}"
+            )
+            if content_summary.get("partial_insights_posts") or content_summary.get("legacy_unknown_insights"):
+                quality_line += (
+                    f"; неполные Insights публикаций: {content_summary.get('partial_insights_posts', 0)}; "
+                    f"старые публикации с неизвестной полнотой: {content_summary.get('legacy_unknown_insights', 0)}"
+                )
+            if stories_summary:
+                quality_line += (
+                    f"; неполные Insights сторис: {stories_summary.get('partial_insights_stories', 0)}; "
+                    f"старые сторис с неизвестной полнотой: {stories_summary.get('legacy_unknown_insights', 0)}"
+                )
         prompt = f"""Проанализируй Instagram-аккаунт за период {period}.
 
 ДАННЫЕ:
@@ -78,6 +102,7 @@ class AIAnalyzer:
 - Контент: {content_summary.get('total_posts', 0)} публикаций; Reels {content_summary.get('total_reels', 0)}; видео {content_summary.get('total_videos', 0)}; фото {content_summary.get('total_images', 0)}; карусели {content_summary.get('total_carousels', 0)}
 - Средние значения: лайки {content_summary.get('avg_likes', 0)}; охват {content_summary.get('avg_reach', 0)}; ER {content_summary.get('engagement_rate', 0)}%
 - {stories_line}
+- Качество данных:{quality_line or ' не указано'}
 - Лучший пост: {best_post_info}
 - Наблюдаемый тренд: {trend}
 
