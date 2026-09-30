@@ -12,12 +12,38 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_LEN = 4096
 
 
+def split_message_text(text: str, max_len: int = MAX_MESSAGE_LEN) -> list[str]:
+    """Split text into Telegram-sized chunks at line boundaries.
+
+    Words are never broken mid-way; a single oversized line is hard-split as a
+    last resort. Every chunk is non-empty and <= max_len.
+    """
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) <= max_len:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        if len(line) <= max_len:
+            current = line
+        else:
+            # single line longer than the limit — hard split it
+            parts = [line[start:start + max_len] for start in range(0, len(line), max_len)]
+            chunks.extend(parts[:-1])
+            current = parts[-1]
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 async def send_long_text(message: Message, text: str) -> None:
     if not text or not text.strip():
         await message.answer("⚠️ Не удалось сформировать текстовый отчёт.", parse_mode=None)
         return
-    for i in range(0, len(text), MAX_MESSAGE_LEN):
-        chunk = text[i:i + MAX_MESSAGE_LEN]
+    for chunk in split_message_text(text):
         if chunk.strip():
             await message.answer(chunk, parse_mode=None)
 

@@ -43,12 +43,67 @@ def truncate_text(text: str, max_len: int = 4096) -> str:
     return text[: max_len - 3] + "..."
 
 
+AI_CONTEXT_MAX_CHARS = 14000
+_OMISSION_TEMPLATE = "…[опущено {count} из {total} {noun} — полные данные в отчёте и Excel]"
+_CONTEXT_CUT_MARKER = "\n…[контекст сокращён — полные данные в отчёте и Excel]"
+
+
+def _truncate_at_line_boundary(text: str, limit: int, marker: str) -> str:
+    """Cut at a line boundary and always tell the reader what happened."""
+    if len(text) <= limit:
+        return text
+    budget = limit - len(marker)
+    cut = text[:budget]
+    newline = cut.rfind("\n")
+    if newline > budget // 2:
+        cut = cut[:newline]
+    return cut + marker
+
+
+def _fit_detail_groups(core_lines: list, tail_lines: list, groups: list, limit: int) -> str:
+    """Assemble the AI context within `limit`, dropping detail rows from the
+    least important group first. Every drop is replaced by an explicit marker —
+    the model must never mistake context trimming for an incomplete report.
+
+    Each group is (header_lines, rows, total_items, noun); headers are always
+    shown, rows are counted so markers can state «опущено N из M».
+    """
+    kept = [len(rows) for _header, rows, _total, _noun in groups]
+
+    def render() -> str:
+        parts = list(core_lines)
+        for (header, rows, total, noun), k in zip(groups, kept):
+            if header:
+                parts.extend(header)
+            parts.extend(rows[:k])
+            omitted = total - k
+            if omitted > 0:
+                parts.append(_OMISSION_TEMPLATE.format(count=omitted, total=total, noun=noun))
+        parts.extend(tail_lines)
+        return "\n".join(parts)
+
+    text = render()
+    for i in range(len(groups) - 1, -1, -1):
+        while kept[i] > 0 and len(text) > limit:
+            kept[i] -= 1
+            text = render()
+    if len(text) > limit:
+        return _truncate_at_line_boundary(render(), limit, _CONTEXT_CUT_MARKER)
+    return text
+
+
 def format_context_for_ai(context: dict) -> str:
     """Format report context for AI dialogue prompt."""
     lines = [
+        "Контекст для анализа: данные отчёта полные — все дни, публикации и сторис "
+        "периода перечислены ниже, если строка не заменена маркером «опущено…». "
+        "Маркер «опущено…» означает сокращение контекста диалога, а не неполноту "
+        "отчёта: пользователь видит полный отчёт.",
         f"Аккаунт: {context.get('account', '—')}",
         f"Период: {context.get('period', '—')}",
     ]
+    groups: list = []
+    tail: list = []
 
     # Check if this is a comparison report
     if context.get("type") == "comparison":
@@ -143,66 +198,76 @@ def format_context_for_ai(context: dict) -> str:
                 f"Для {quality['legacy_unknown_days']} старых дней API-полнота неизвестна."
             )
 
-    # Daily stats
+    # Daily stats — full detail, trimmed only with explicit markers
     daily = context.get("daily_stats", [])
     if daily:
-        lines.append("\nДанные по дням:")
-        for d in daily[:14]:
+        daily_rows = []
+        for d in daily:
             followers = d.get("followers")
             followers_text = f"{followers:+d}" if followers is not None else "н/д"
-            lines.append(f"  {d['date']}: охват {d['reach']}, подписчики {followers_text}, "
-                         f"просмотры {d['views']}, вовлечено {d['accounts_engaged']}")
+            daily_rows.append(
+                f"  {d['date']}: охват {d['reach']}, подписчики {followers_text}, "
+                f"просмотры {d['views']}, вовлечено {d['accounts_engaged']}"
+            )
+        groups.append((["\nДанные по дням:"], daily_rows, len(daily_rows), "дней"))
 
-    # Publications calendar
+    # Publications calendar — full detail, trimmed only with explicit markers
     publications = context.get("publications", [])
     if publications:
-        lines.append("\nПубликации по дням:")
+        pub_rows = []
         type_name = {"IMAGE": "Фото", "VIDEO": "Видео", "CAROUSEL_ALBUM": "Карусель", "REELS": "Reels"}
-        for day in publications[:12]:
-            lines.append(f"  {day['date']}:")
+        for day in publications:
             for p in day["posts"]:
                 mtype = type_name.get(p["type"], p["type"])
-                lines.append(f"    {mtype}: \"{p['caption'][:50]}\" — "
-                             f"❤️{p['likes']} 💬{p['comments']} 💾{p['saved']} 📤{p['shares']} reach:{p['reach']}")
+                pub_rows.append(
+                    f"  {day['date']}: {mtype}: \"{p['caption'][:50]}\" — "
+                    f"❤️{p['likes']} 💬{p['comments']} 💾{p['saved']} 📤{p['shares']} reach:{p['reach']}"
+                )
+        groups.append((["\nПубликации:"], pub_rows, len(pub_rows), "публикаций"))
 
     # Stories of the period
     stories = context.get("stories", {})
     if stories.get("total_stories"):
-        lines.append(f"\nСторис: {stories['total_stories']} шт, просмотры {stories['total_views']} "
-                     f"(ср. {stories['avg_views']}), охват {stories['total_reach']}, "
-                     f"ответы {stories['total_replies']}, репосты {stories['total_shares']}, "
-                     f"выходы {stories['exit_rate']}%")
+        story_header = [f"\nСторис: {stories['total_stories']} шт, просмотры {stories['total_views']} "
+                        f"(ср. {stories['avg_views']}), охват {stories['total_reach']}, "
+                        f"ответы {stories['total_replies']}, репосты {stories['total_shares']}, "
+                        f"выходы {stories['exit_rate']}%"]
         if stories.get("partial_insights_stories") or stories.get("legacy_unknown_insights"):
-            lines.append(
-                f"Полнота Insights сторис: неполных {stories.get('partial_insights_stories', 0)}, "
-                f"старых неизвестных {stories.get('legacy_unknown_insights', 0)}"
+            story_header.append(
+                f"Полнота Insights сторис: неполных — {stories.get('partial_insights_stories', 0)}; "
+                f"старых с неизвестной полнотой — {stories.get('legacy_unknown_insights', 0)} "
+                f"(старые сторис: полнота данных не подтверждена, это не «полные» данные)"
             )
-        for s in context.get("stories_list", [])[:20]:
-            lines.append(f"  {s['date']}: 👁{s['views']} охват:{s['reach']} "
-                         f"💬{s['replies']} 📤{s['shares']}")
+        story_rows = [
+            f"  {s['date']}: 👁{s['views']} охват:{s['reach']} "
+            f"💬{s['replies']} 📤{s['shares']}"
+            for s in context.get("stories_list", [])
+        ]
+        groups.append((story_header, story_rows, len(story_rows), "сторис"))
 
     # Best post
     best = context.get("best_post", "")
     if best and best != "нет данных":
-        lines.append(f"\nЛучший пост:\n{best}")
+        tail.append(f"\nЛучший пост:\n{best}")
 
     top_posts = context.get("top_posts", [])
     if top_posts:
-        lines.append("\nТоп публикаций по взаимодействиям:")
+        tail.append("\nТоп публикаций по взаимодействиям:")
         for post in top_posts[:3]:
-            lines.append(
+            tail.append(
                 f"  {post['media_type']}: {post['value']} взаимодействий, "
                 f"охват {post['reach']}, \"{post['caption']}\""
             )
 
     formats = context.get("format_performance", {})
     if formats:
-        lines.append("\nФорматы:")
+        tail.append("\nФорматы:")
         for media_type, values in formats.items():
-            lines.append(
+            tail.append(
                 f"  {media_type}: {values['posts']} публикаций, "
                 f"средний охват {values['reach_avg']}, ER {values['engagement_rate']}%"
             )
 
-    # Keep repeated dialogue requests fast and leave the model room to answer.
-    return truncate_text("\n".join(lines), 14000)
+    # Keep repeated dialogue requests fast and leave the model room to answer,
+    # but never trim silently: _fit_detail_groups marks every omission.
+    return _fit_detail_groups(lines, tail, groups, AI_CONTEXT_MAX_CHARS)

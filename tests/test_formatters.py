@@ -118,3 +118,120 @@ def test_parse_comparison_ok():
 def test_parse_comparison_bad():
     with pytest.raises(ValueError):
         parse_comparison_input("01.09-07.09 против 08.09-14.09", TODAY)
+
+
+# ── AI context completeness (regression: silent truncation misled the model) ──
+
+def _big_report_context(days=29, posts=17, stories=20):
+    daily_stats = [
+        {"date": f"{i + 1:02d}.09", "reach": 100 + i, "followers": 5,
+         "views": 1000 + i, "accounts_engaged": 50 + i}
+        for i in range(days)
+    ]
+    publications = []
+    for i in range(posts):
+        publications.append({
+            "date": f"2026-09-{(i % 28) + 1:02d}",
+            "posts": [{
+                "type": "REELS" if i % 2 else "IMAGE",
+                "caption": f"unique-caption-{i:03d} " + "x" * 40,
+                "likes": 10 + i, "comments": 1, "saved": 2, "shares": 3,
+                "reach": 500 + i, "views": 900 + i,
+            }],
+        })
+    return {
+        "account": "@test — Test",
+        "period": "1–29 сентября",
+        "type": "report",
+        "stats": {"followers_current": 5000, "followers_growth": 840, "reach_total": 31253,
+                  "views_total": 177197, "accounts_engaged_total": 1972,
+                  "reach_avg_daily": 1078},
+        "content": {"total_posts": posts, "total_reels": 8, "total_videos": 0,
+                    "total_images": 4, "total_carousels": 5, "avg_likes": 73,
+                    "avg_reach": 1828, "engagement_rate": 5.1,
+                    "total_interactions": 1570, "total_reach": 31082,
+                    "partial_insights_posts": 0, "legacy_unknown_insights": 0},
+        "stories": {"total_stories": stories, "total_views": 4232, "avg_views": 423,
+                    "total_reach": 3184, "total_replies": 5, "total_shares": 18,
+                    "exit_rate": 20.4, "partial_insights_stories": 0,
+                    "legacy_unknown_insights": 10},
+        "stories_list": [
+            {"date": f"2026-09-{(i % 28) + 1:02d}", "views": 100 + i, "reach": 90 + i,
+             "replies": 1, "shares": 2}
+            for i in range(stories)
+        ],
+        "best_post": "unique-caption-016\n❤️ 190 | 💬 17 | 💾 8 | 📤 8 | Охват 2 222",
+        "daily_stats": daily_stats,
+        "publications": publications,
+        "top_posts": [{"media_type": "Reels", "value": 222, "reach": 2222,
+                       "caption": "unique-caption-016"}],
+        "format_performance": {"REELS": {"posts": 8, "reach_avg": 1828, "engagement_rate": 5.1}},
+        "data_quality": {"available_days": 29, "expected_days": 29, "missing_days": 0,
+                         "partial_days": 0, "legacy_unknown_days": 0,
+                         "metric_missing_days": {}, "complete": True},
+        "ai_analysis": "анализ",
+    }
+
+
+def test_ai_context_contains_all_days_and_posts_for_month():
+    """Regression: daily[:14] / publications[:12] made the model believe the
+    report itself was incomplete. Every day and every post must be present."""
+    ctx = _big_report_context(days=29, posts=17)
+    text = format_context_for_ai(ctx)
+    for i in range(29):
+        assert f"{i + 1:02d}.09" in text
+    for i in range(17):
+        assert f"unique-caption-{i:03d}" in text
+    # no silent trimming for a context that fits the budget:
+    # no omission markers (the disclaimer mentions «опущено…» by design)
+    assert "…[опущено" not in text
+    assert len(text) <= 14000
+
+
+def test_ai_context_marks_omissions_when_over_budget():
+    """When the context is over budget, every trim must carry an explicit marker."""
+    ctx = _big_report_context(days=300, posts=300, stories=300)
+    text = format_context_for_ai(ctx)
+    assert len(text) <= 14000
+    assert "…[опущено" in text
+    assert "из 300" in text  # «опущено N из 300 …» — counts are explicit
+    assert "полные данные в отчёте" in text
+
+
+def test_ai_context_disclaimer_present():
+    text = format_context_for_ai(_big_report_context(days=3, posts=2))
+    assert "Маркер «опущено…» означает сокращение контекста диалога, а не неполноту" in text
+
+
+# ── message splitting (regression: «ком/ментариев» mid-word breaks) ──
+
+def test_split_message_text_keeps_words_intact():
+    from bot.helpers import split_message_text
+
+    line = "слово " * 680  # ~4080 chars — just under the limit
+    text = "\n".join([line, "короткая строка", line])
+    chunks = split_message_text(text, max_len=4096)
+    assert chunks
+    assert all(len(c) <= 4096 for c in chunks)
+    assert "\n".join(chunks) == text  # lossless
+    # splitting happens at line boundaries only — words stay intact
+    assert all(token == "слово" for token in line.split())
+    for chunk in chunks:
+        assert set(chunk.split()) <= {"слово", "короткая", "строка"}
+
+
+def test_split_message_text_hard_splits_only_monster_lines():
+    from bot.helpers import split_message_text
+
+    monster = "x" * 10000  # single word longer than the limit — last resort
+    chunks = split_message_text(monster, max_len=4096)
+    assert "".join(chunks) == monster
+    assert all(len(c) <= 4096 for c in chunks)
+
+
+def test_split_message_text_preserves_short_lines_unsplit():
+    from bot.helpers import split_message_text
+
+    text = "⚠️ Контроль действий: сумма лайков, комментариев, сохранений и репостов"
+    chunks = split_message_text(text, max_len=4096)
+    assert chunks == [text]

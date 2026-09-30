@@ -91,3 +91,50 @@ class AIPromptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertLessEqual(len(result), 3501)
         self.assertEqual(result[-1], chr(8230))
+
+    async def test_token_budgets_leave_room_for_reasoning_models(self):
+        """Regression: with reasoning_effort the hidden reasoning tokens consume
+        max_completion_tokens; small budgets (550–900) ended with
+        finish_reason=length and an empty visible answer."""
+        from analytics.ai_analyzer import (
+            REPORT_MAX_COMPLETION_TOKENS, CHAT_MAX_COMPLETION_TOKENS,
+        )
+
+        self.assertGreaterEqual(REPORT_MAX_COMPLETION_TOKENS, 2000)
+        self.assertGreaterEqual(CHAT_MAX_COMPLETION_TOKENS, 2000)
+
+        # every call path must use the generous budgets
+        self.analyzer.client.chat.completions.create = AsyncMock(
+            return_value=_response("ok")
+        )
+        await self.analyzer.analyze_account(
+            "01.09–29.09", {"followers_current": 1}, {"total_posts": 1},
+            "best", "stable",
+        )
+        kwargs = self.analyzer.client.chat.completions.create.await_args.kwargs
+        self.assertGreaterEqual(kwargs["max_completion_tokens"], 2000)
+
+    async def test_chat_context_truncation_is_explicit(self):
+        """Regression: silent context truncation made the model claim the
+        report itself was incomplete."""
+        captured = {}
+
+        async def capture(**kwargs):
+            captured.update(kwargs)
+            return _response("ok")
+
+        self.analyzer.client.chat.completions.create = AsyncMock(side_effect=capture)
+        long_context = "строка контекста\n" * 3000  # >> MAX_CONTEXT_CHARS
+        await self.analyzer.chat_with_context(long_context, [], "Вопрос")
+
+        combined = "\n".join(
+            m["content"] for m in captured["messages"]
+        )
+        self.assertIn("контекст сокращён", combined)
+        self.assertLessEqual(len(combined), 14000 + 2000)
+
+    def test_chat_prompt_forbids_doubting_report_completeness(self):
+        from analytics.ai_analyzer import CHAT_SYSTEM_PROMPT
+
+        self.assertIn("а НЕ неполноту самого отчёта", CHAT_SYSTEM_PROMPT)
+        self.assertIn("Никогда не делай вывод, что отчёт неполный", CHAT_SYSTEM_PROMPT)

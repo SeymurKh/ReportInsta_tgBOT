@@ -31,11 +31,24 @@ CHAT_SYSTEM_PROMPT += (
     "контекста и один практический вывод. Не пересказывай контекст целиком. "
     "Если вопрос требует данных, которых нет, так и напиши."
 )
+CHAT_SYSTEM_PROMPT += (
+    " В контексте могут встречаться маркеры «опущено…» и «контекст сокращён» — "
+    "это означает сокращение контекста диалога, а НЕ неполноту самого отчёта: "
+    "пользователь видит полный отчёт. Никогда не делай вывод, что отчёт неполный "
+    "или недостоверный, на основании этих маркеров. Отвечай о достоверности "
+    "только по фактическим данным: полнота дней, метрик и публикаций указана "
+    "в строках «Качество данных» и «Полнота»."
+)
 
 MAX_CONTEXT_CHARS = 14000
 MAX_HISTORY_MESSAGES = 12
 MAX_HISTORY_MESSAGE_CHARS = 1200
 MAX_CHAT_RESPONSE_CHARS = 3500
+# For reasoning models max_completion_tokens includes hidden reasoning tokens:
+# a budget of ~700 can be consumed entirely by reasoning (finish_reason=length
+# with empty content). Keep generous budgets so the visible answer always fits.
+REPORT_MAX_COMPLETION_TOKENS = 2400
+CHAT_MAX_COMPLETION_TOKENS = 2400
 
 
 def _compact_history(history: list) -> list[dict]:
@@ -115,7 +128,7 @@ class AIAnalyzer:
 2) Сильная сторона и слабая сторона.
 3) Ровно 2 действия: что сделать, в каком приоритете и на какой показатель это должно повлиять.
 Не пересказывай входные данные и не добавляй вступление. Не называй охват выбранного лучшего поста слабым только потому, что он ниже среднего: пост выбран по оценочному баллу взаимодействий с учётом охвата. Не трактуй краткосрочное снижение как отрицательный прирост за весь период. Если показатели противоречат друг другу или их база расчёта различается, отметь это вместо вывода причины."""
-        return await self._call_openai(prompt, max_tokens=700)
+        return await self._call_openai(prompt, max_tokens=REPORT_MAX_COMPLETION_TOKENS)
 
     async def analyze_comparison(self, accounts_summary: str) -> str:
         prompt = f"""Сравни два периода Instagram-аккаунта.
@@ -133,7 +146,7 @@ class AIAnalyzer:
             "связывай рекомендацию с форматом или конкретной публикацией только если "
             "это подтверждено переданными данными; максимум 5 коротких пунктов."
         )
-        return await self._call_openai(prompt, max_tokens=550)
+        return await self._call_openai(prompt, max_tokens=REPORT_MAX_COMPLETION_TOKENS)
 
     async def generate_recommendations(
         self, stats_summary: dict, content_summary: dict, ai_analysis: str,
@@ -144,11 +157,20 @@ class AIAnalyzer:
 ДАННЫЕ: подписчики {stats_summary.get('followers_end', 0)}, охват {stats_summary.get('reach_total', 0)}, ER {content_summary.get('engagement_rate', 0)}%, публикаций {content_summary.get('total_posts', 0)}.
 
 Для каждой рекомендации укажи: приоритет (высокий/средний/низкий), конкретное действие, метрику контроля и ожидаемый эффект. Максимум 6 коротких строк, без общих советов."""
-        return await self._call_openai(prompt, max_tokens=650)
+        return await self._call_openai(prompt, max_tokens=REPORT_MAX_COMPLETION_TOKENS)
 
     async def chat_with_context(self, context: str, history: list, question: str) -> str:
         """Answer a follow-up question using a bounded report context and history."""
-        bounded_context = context[:MAX_CONTEXT_CHARS]
+        # Never trim silently: a silent cut makes the model believe the report
+        # itself is incomplete and it starts doubting real data.
+        if len(context) <= MAX_CONTEXT_CHARS:
+            bounded_context = context
+        else:
+            cut = context[:MAX_CONTEXT_CHARS]
+            newline = cut.rfind("\n")
+            if newline > MAX_CONTEXT_CHARS // 2:
+                cut = cut[:newline]
+            bounded_context = cut + "\n…[контекст сокращён — полные данные в отчёте и Excel]"
         messages = [
             {"role": "system", "content": CHAT_SYSTEM_PROMPT},
             {"role": "user", "content": f"КОНТЕКСТ ОТЧЁТА:\n{bounded_context}"},
@@ -160,7 +182,7 @@ class AIAnalyzer:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_completion_tokens=900,
+                max_completion_tokens=CHAT_MAX_COMPLETION_TOKENS,
                 reasoning_effort=self.reasoning_chat,
             )
             content = response.choices[0].message.content or ""

@@ -267,6 +267,19 @@ def _report_check_block(generated, account, independent, posts, stories):
             f"❤️ {post.likes} | 💬 {post.comments} | 💾 {post.saved} | 📤 {post.shares} | Охват {format_number(post.reach)}",
         ))
     checks["report_text_publications"] = all(marker in text for marker in post_markers)
+    # AI context must contain every day and every post the report has —
+    # silent truncation there made the model doubt real data (regression).
+    from utils.formatters import format_context_for_ai
+    ai_context = format_context_for_ai(context)
+    expected_ai_items = [d["date"] for d in context.get("daily_stats", [])]
+    expected_ai_items += [
+        post["caption"][:50]
+        for day in context.get("publications", [])
+        for post in day["posts"]
+    ]
+    checks["ai_context_complete"] = all(
+        item in ai_context or "…[опущено" in ai_context for item in expected_ai_items
+    )
     if actual_stories["total_stories"]:
         story_markers = (
             f"📲 Сторис ({actual_stories['total_stories']})",
