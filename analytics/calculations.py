@@ -92,6 +92,7 @@ def calculate_content_summary(posts_list: list) -> dict:
             "total_posts": 0, "total_reels": 0, "total_videos": 0, "total_carousels": 0, "total_images": 0,
             "total_likes": 0, "total_comments": 0, "total_saves": 0, "total_shares": 0,
             "total_interactions": 0, "total_reach": 0,
+            "component_interactions": 0, "interaction_gap": 0,
             "avg_likes": 0, "avg_comments": 0, "avg_reach": 0,
             "engagement_rate": 0.0,
             "legacy_unknown_insights": 0, "partial_insights_posts": 0,
@@ -110,6 +111,7 @@ def calculate_content_summary(posts_list: list) -> dict:
     total_shares = sum(p.shares for p in posts_list)
     total_reach = sum(p.reach for p in posts_list)
     total_interactions = sum(p.total_interactions for p in posts_list)
+    component_interactions = total_likes + total_comments + total_saves + total_shares
 
     expected_metrics = {
         "IMAGE": {"reach", "saved", "total_interactions"},
@@ -141,6 +143,8 @@ def calculate_content_summary(posts_list: list) -> dict:
         "total_saves": total_saves,
         "total_shares": total_shares,
         "total_interactions": total_interactions,
+        "component_interactions": component_interactions,
+        "interaction_gap": total_interactions - component_interactions,
         "total_reach": total_reach,
         "avg_likes": round(total_likes / total) if total else 0,
         "avg_comments": round(total_comments / total) if total else 0,
@@ -319,7 +323,11 @@ def calculate_stories_summary(stories_list: list) -> dict:
     missing_insight_metrics = {name: 0 for name in story_metric_names}
     partial_insights_stories = 0
     for story in known_stories:
-        missing = story_metric_names - set(json.loads(story.metrics_present))
+        try:
+            present_names = set(json.loads(story.metrics_present))
+        except (TypeError, ValueError):
+            present_names = set()
+        missing = story_metric_names - present_names
         if missing:
             partial_insights_stories += 1
             for metric in missing:

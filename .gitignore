@@ -30,6 +30,9 @@ Thumbs.db
 *.db
 *.sqlite3
 
+# Local audit backups (contain .env copies)
+backups/
+
 # Logs
 *.log
 

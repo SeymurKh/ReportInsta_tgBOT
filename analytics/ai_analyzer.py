@@ -104,6 +104,7 @@ class AIAnalyzer:
 - Охват: {stats_summary.get('reach_total', 0)}; просмотры: {stats_summary.get('views_total', 'н/д')}; вовлечено: {stats_summary.get('accounts_engaged_total', 'н/д')}
 - Контент: {content_summary.get('total_posts', 0)} публикаций; Reels {content_summary.get('total_reels', 0)}; видео {content_summary.get('total_videos', 0)}; фото {content_summary.get('total_images', 0)}; карусели {content_summary.get('total_carousels', 0)}
 - Средние значения: лайки {content_summary.get('avg_likes', 0)}; охват {content_summary.get('avg_reach', 0)}; ER {content_summary.get('engagement_rate', 0)}% (total_interactions Insights {content_summary.get('total_interactions', 'н/д')} / суммарный охват публикаций {content_summary.get('total_reach', 'н/д')})
+- Контроль взаимодействий: сумма лайков, комментариев, сохранений и репостов {content_summary.get('component_interactions', 'н/д')}; разница с total_interactions Insights {content_summary.get('interaction_gap', 'н/д')}. Если разница ненулевая, сообщи о расхождении источников и не называй конкретную причину без подтверждения.
 - {stories_line}
 - Качество данных:{quality_line or ' не указано'}
 - Лучший пост (по оценочному баллу: лайки + 2×комментарии + 3×сохранения + 4×репосты на охват; он не обязательно имеет максимальный охват): {best_post_info}

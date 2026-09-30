@@ -4,7 +4,7 @@ import asyncio
 from openpyxl import load_workbook
 
 from bot.helpers import build_excel_from_context, parse_period_input, send_long_text
-from reports.generator import _day_end, resolve_period
+from reports.generator import _day_end, _interaction_reconciliation_note, resolve_period
 
 
 def test_parse_period_rejects_future_date():
@@ -30,6 +30,20 @@ def test_day_end_is_available_for_digest_and_sync():
     from datetime import date, datetime
 
     assert _day_end(date(2026, 9, 23)) == datetime(2026, 9, 23, 23, 59, 59)
+
+
+def test_interaction_reconciliation_note_is_only_emitted_for_a_gap():
+    assert _interaction_reconciliation_note({"interaction_gap": 0}) == ""
+
+    note = _interaction_reconciliation_note({
+        "component_interactions": 335,
+        "total_interactions": 375,
+        "interaction_gap": 40,
+    })
+    assert "335" in note
+    assert "375" in note
+    assert "+40" in note
+    assert "ER рассчитан по total_interactions" in note
 
 
 def test_empty_message_is_replaced_with_fallback():

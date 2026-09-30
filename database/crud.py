@@ -148,6 +148,41 @@ async def finish_sync_run(
         await session.commit()
 
 
+async def recover_orphaned_sync_runs(now: datetime | None = None) -> int:
+    """Close unfinished runs that no live sync lease can still own."""
+    current = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    async with async_session_factory() as session:
+        active_run_lease = select(SyncLease.id).where(
+            SyncLease.account_id == SyncRun.account_id,
+            SyncLease.sync_type == SyncRun.sync_type,
+            SyncLease.expires_at > current,
+        ).exists()
+        recovered = await session.execute(
+            update(SyncRun)
+            .where(SyncRun.status == "running", ~active_run_lease)
+            .values(
+                status="interrupted",
+                finished_at=current,
+                error="Service stopped before sync completed",
+            )
+        )
+
+        active_account_lease = select(SyncLease.id).where(
+            SyncLease.account_id == Account.id,
+            SyncLease.expires_at > current,
+        ).exists()
+        await session.execute(
+            update(Account)
+            .where(Account.sync_status == "running", ~active_account_lease)
+            .values(
+                sync_status="failed",
+                last_sync_error="Previous sync was interrupted before completion",
+            )
+        )
+        await session.commit()
+        return max(recovered.rowcount or 0, 0)
+
+
 async def acquire_sync_lease(
     account_id: int,
     owner: str,
@@ -644,7 +679,17 @@ async def update_story_insights(instagram_media_id: str, metrics: dict) -> None:
             value = metrics.get(field)
             if value is not None:
                 setattr(row, field, max(getattr(row, field) or 0, value))
-        row.metrics_present = json.dumps(sorted(set(metrics)))
+        # Provenance is cumulative: keep metric names seen in earlier refreshes,
+        # otherwise a partial refresh would erase known provenance.
+        previous: set[str] = set()
+        if row.metrics_present:
+            try:
+                decoded = json.loads(row.metrics_present)
+                if isinstance(decoded, list):
+                    previous = {v for v in decoded if isinstance(v, str)}
+            except (TypeError, ValueError):
+                previous = set()
+        row.metrics_present = json.dumps(sorted(previous | set(metrics)))
         row.insights_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await session.commit()
 

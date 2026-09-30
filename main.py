@@ -65,6 +65,10 @@ async def main() -> None:
         await crud.clear_all_data()
         logger.info("Database cleared (--reset)")
 
+    recovered_runs = await crud.recover_orphaned_sync_runs()
+    if recovered_runs:
+        logger.warning("Marked %d unfinished sync runs as interrupted", recovered_runs)
+
     await seed_accounts()
 
     bot = Bot(token=settings.BOT_TOKEN)  # plain text everywhere; no parse_mode surprises

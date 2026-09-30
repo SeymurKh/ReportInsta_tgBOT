@@ -129,6 +129,14 @@ def test_content_summary_er_zero_reach():
     assert c["engagement_rate"] == 0.0
 
 
+def test_content_summary_reports_interaction_source_difference():
+    post = FakePost(likes=10, comments=2, saved=3, shares=1, total_interactions=20)
+    summary = calculate_content_summary([post])
+
+    assert summary["component_interactions"] == 16
+    assert summary["interaction_gap"] == 4
+
+
 # ── stories ──
 
 def test_stories_summary_empty():

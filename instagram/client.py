@@ -311,9 +311,15 @@ class InstagramClient:
                 metric_presence.setdefault(day, set()).add(name)
 
         # New-format metrics (views, accounts_engaged) — one request per day,
-        # parallelized in small batches
-        current = datetime.fromtimestamp(since, tz=timezone.utc)
-        end = datetime.fromtimestamp(until, tz=timezone.utc)
+        # parallelized in small batches. Day windows are always midnight-to-
+        # midnight UTC: IG returns the total for exactly the requested window,
+        # so a misaligned `since` would attribute values to the wrong day.
+        current = datetime.fromtimestamp(since, tz=timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        end = datetime.fromtimestamp(until, tz=timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         days = []
         while current <= end:
             if days_to_fetch is None or current.date() in days_to_fetch:

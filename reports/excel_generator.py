@@ -155,7 +155,11 @@ def generate_excel_report(
             ("Карусели", content_summary.get("total_carousels", 0)), ("Лайки", content_summary.get("total_likes", 0)),
             ("Комментарии", content_summary.get("total_comments", 0)), ("Сохранения", content_summary.get("total_saves", 0)),
             ("Репосты", content_summary.get("total_shares", 0)), ("Ср. лайки", content_summary.get("avg_likes", 0)),
-            ("Ср. охват", content_summary.get("avg_reach", 0)), ("ER %", content_summary.get("engagement_rate", 0)),
+            ("Ср. охват", content_summary.get("avg_reach", 0)),
+            ("ER % (Insights / охват)", content_summary.get("engagement_rate", 0)),
+            ("Сумма видимых действий", content_summary.get("component_interactions", 0)),
+            ("total_interactions Insights", content_summary.get("total_interactions", 0)),
+            ("Разница Insights − сумма действий", content_summary.get("interaction_gap", 0)),
         ]),
     ]
     for title, items in sections:

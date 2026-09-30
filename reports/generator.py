@@ -93,6 +93,23 @@ def _warnings_block(api_delay_dates: list[str], partial: bool) -> str:
         parts.append("⚠️ Часть данных не удалось получить из Instagram API — отчёт может быть неполным")
     return ("\n\n" + "\n".join(parts)) if parts else ""
 
+
+def _interaction_reconciliation_note(content_summary: dict, period: str = "") -> str:
+    gap = content_summary.get("interaction_gap", 0)
+    if not gap:
+        return ""
+    label = f" за {period}" if period else ""
+    difference = format_number(abs(gap))
+    signed_difference = f"+{difference}" if gap > 0 else f"-{difference}"
+    return (
+        f"⚠️ Контроль действий{label}: сумма лайков, комментариев, сохранений и репостов "
+        f"({format_number(content_summary.get('component_interactions', 0) or 0)}) "
+        f"не совпадает с total_interactions Insights "
+        f"({format_number(content_summary.get('total_interactions', 0) or 0)}; "
+        f"разница {signed_difference}). Метрики показаны по источникам отдельно; "
+        "ER рассчитан по total_interactions."
+    )
+
 # ────────────────────── Stories helpers ──────────────────────
 
 def _stories_to_dicts(stories_list: list) -> list[dict]:
@@ -282,6 +299,9 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
 {ai_analysis}"""
 
     report_text += _warnings_block(fetch_info["api_delay_dates"], fetch_info["partial"])
+    interaction_note = _interaction_reconciliation_note(content_summary)
+    if interaction_note:
+        report_text += "\n\n" + interaction_note
     metric_gaps = [
         f"{metric}: {missing} дн. без метрики"
         for metric, missing in data_quality["metric_missing_days"].items()
@@ -495,6 +515,12 @@ async def generate_comparison_periods_report(
     ]
 
     lines.append("")
+    for label, content in ((p1_str, c1), (p2_str, c2)):
+        note = _interaction_reconciliation_note(content, label)
+        if note:
+            lines.append(note)
+    if c1.get("interaction_gap") or c2.get("interaction_gap"):
+        lines.append("")
     lines.append("Форматы контента:")
     for media_type in sorted(set(formats1) | set(formats2)):
         left = formats1.get(media_type, {})

@@ -2,7 +2,7 @@
 
 import json
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from sqlalchemy import create_engine as create_sync_engine, inspect, select
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from database import crud
 from database.engine import _apply_lightweight_migrations
-from database.models import Account, Base, DailyStats
+from database.models import Account, Base, DailyStats, SyncLease, SyncRun
 from instagram.client import InstagramAPIError, InstagramClient, TokenExpiredError
 from services.data_sync import make_insights_filter
 from services.scheduler import _sync_with_backoff
@@ -41,6 +41,60 @@ class FakeSession:
 
 
 class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_startup_recovers_orphaned_sync_runs_but_keeps_live_leases(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        now = datetime(2026, 9, 30, 12)
+
+        async with factory() as session:
+            orphan = Account(
+                instagram_user_id="orphan", username="orphan", name="Orphan",
+                access_token="token", sync_status="running",
+            )
+            active = Account(
+                instagram_user_id="active", username="active", name="Active",
+                access_token="token", sync_status="running",
+            )
+            expired = Account(
+                instagram_user_id="expired", username="expired", name="Expired",
+                access_token="token", sync_status="running",
+            )
+            session.add_all([orphan, active, expired])
+            await session.flush()
+            runs = [
+                SyncRun(account_id=account.id, sync_type="full", started_at=now, status="running")
+                for account in (orphan, active, expired)
+            ]
+            session.add_all(runs)
+            session.add_all([
+                SyncLease(
+                    account_id=active.id, sync_type="full", owner="active-worker",
+                    acquired_at=now, expires_at=now + timedelta(hours=1),
+                ),
+                SyncLease(
+                    account_id=expired.id, sync_type="full", owner="dead-worker",
+                    acquired_at=now - timedelta(hours=3), expires_at=now - timedelta(hours=1),
+                ),
+            ])
+            await session.commit()
+            run_ids = [run.id for run in runs]
+            account_ids = [orphan.id, active.id, expired.id]
+
+        with patch.object(crud, "async_session_factory", factory):
+            recovered = await crud.recover_orphaned_sync_runs(now)
+            async with factory() as session:
+                persisted_runs = [await session.get(SyncRun, run_id) for run_id in run_ids]
+                persisted_accounts = [await session.get(Account, account_id) for account_id in account_ids]
+
+        await engine.dispose()
+        self.assertEqual(recovered, 2)
+        self.assertEqual([run.status for run in persisted_runs], ["interrupted", "running", "interrupted"])
+        self.assertEqual([account.sync_status for account in persisted_accounts], ["failed", "running", "failed"])
+        self.assertEqual(persisted_runs[0].finished_at, now)
+        self.assertIn("interrupted", persisted_accounts[0].last_sync_error)
+
     async def test_old_post_insights_refresh_weekly_instead_of_freezing(self):
         now = datetime(2026, 9, 30, 12)
         post = SimpleNamespace(
@@ -217,4 +271,39 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
             await crud.release_sync_lease(1, "owner-b")
 
         await engine.dispose()
+
+
+    async def test_snapshot_day_windows_are_midnight_aligned(self):
+        """Regression: off-midnight since/until must not shift new-format
+        day metrics (views/accounts_engaged) into neighbouring days. IG
+        returns the total for exactly the requested window."""
+        client = InstagramClient("user", "token")
+        requested: list[tuple[int, int]] = []
+
+        async def fake_user_info():
+            return {"username": "u"}
+
+        async def fake_account_insights(since, until, metrics=None):
+            return {"data": []}
+
+        async def fake_new_metrics(day_start, day_end):
+            requested.append((day_start, day_end))
+            return {"data": []}
+
+        with (
+            patch.object(client, "get_user_info", fake_user_info),
+            patch.object(client, "get_account_insights", fake_account_insights),
+            patch.object(client, "get_account_insights_new_metrics_day", fake_new_metrics),
+        ):
+            # 18:27 UTC boundaries — the shape that caused the day shift
+            since = int(datetime(2026, 9, 28, 18, 27).timestamp())
+            until = int(datetime(2026, 9, 30, 18, 27).timestamp())
+            snapshot = await client.collect_full_snapshot(since, until)
+
+        self.assertTrue(requested)
+        for day_start, day_end in requested:
+            start = datetime.fromtimestamp(day_start, tz=timezone.utc)
+            end = datetime.fromtimestamp(day_end, tz=timezone.utc)
+            self.assertEqual((start.hour, start.minute, start.second), (0, 0, 0))
+            self.assertEqual(end - start, timedelta(days=1))
 
