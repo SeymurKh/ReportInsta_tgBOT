@@ -114,7 +114,7 @@ def calculate_content_summary(posts_list: list) -> dict:
     component_interactions = total_likes + total_comments + total_saves + total_shares
 
     expected_metrics = {
-        "IMAGE": {"reach", "saved", "total_interactions"},
+        "IMAGE": {"reach", "saved", "shares", "total_interactions"},
         "VIDEO": {"reach", "saved", "shares", "total_interactions", "views"},
         "REELS": {"reach", "saved", "shares", "total_interactions", "views"},
         "CAROUSEL_ALBUM": {"reach", "saved", "shares", "total_interactions"},

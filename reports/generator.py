@@ -323,12 +323,13 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
     if content_summary["partial_insights_posts"] or content_summary["legacy_unknown_insights"]:
         report_text += (
             f"\nℹ️ Insights публикаций: неполных — {content_summary['partial_insights_posts']}; "
-            f"старых с неизвестной полнотой — {content_summary['legacy_unknown_insights']}"
+            f"собраны до внедрения учёта полноты — {content_summary['legacy_unknown_insights']}"
         )
     if stories_summary["partial_insights_stories"] or stories_summary["legacy_unknown_insights"]:
         report_text += (
             f"\nℹ️ Insights сторис: неполных — {stories_summary['partial_insights_stories']}; "
-            f"старых с неизвестной полнотой — {stories_summary['legacy_unknown_insights']}"
+            f"собраны до внедрения учёта полноты — {stories_summary['legacy_unknown_insights']} "
+            f"(данные реальные, полнота метрик документально не подтверждена)"
         )
 
 

@@ -307,3 +307,41 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((start.hour, start.minute, start.second), (0, 0, 0))
             self.assertEqual(end - start, timedelta(days=1))
 
+
+    async def test_image_insights_include_shares(self):
+        """Regression: MEDIA_METRICS_MAP['IMAGE'] omitted 'shares', so photo
+        reposts were never fetched while total_interactions included them —
+        reports showed «📤 0» for photos with 195 real shares."""
+        client = InstagramClient("user", "token")
+        captured = {}
+
+        async def fake_request(url, params=None):
+            captured["url"] = url
+            captured["params"] = params
+            return {"data": [
+                {"name": "reach", "total_value": {"value": 100}},
+                {"name": "shares", "total_value": {"value": 7}},
+                {"name": "total_interactions", "total_value": {"value": 30}},
+            ]}
+
+        with patch.object(client, "_request", fake_request):
+            result = await client.get_media_insights("media-1", "IMAGE")
+
+        requested = captured["params"]["metric"].split(",")
+        self.assertIn("shares", requested)
+        self.assertEqual(result["shares"], 7)
+
+    def test_expected_metrics_cover_image_shares(self):
+        """If shares are requested for IMAGE, completeness tracking must expect
+        them too — otherwise every photo is flagged as having missing metrics."""
+        from analytics.calculations import calculate_content_summary
+
+        post = SimpleNamespace(
+            media_type="IMAGE", likes=10, comments=2, saved=3, shares=5,
+            reach=100, total_interactions=20,
+            insights_present='["reach", "saved", "shares", "total_interactions"]',
+        )
+        summary = calculate_content_summary([post])
+        self.assertEqual(summary["partial_insights_posts"], 0)
+        self.assertNotIn("shares", summary["missing_insight_metrics"])
+

@@ -177,7 +177,7 @@ def format_context_for_ai(context: dict) -> str:
         if content.get("partial_insights_posts") or content.get("legacy_unknown_insights"):
             lines.append(
                 f"Полнота Insights публикаций: неполных {content.get('partial_insights_posts', 0)}, "
-                f"старых неизвестных {content.get('legacy_unknown_insights', 0)}"
+                f"собраны до внедрения учёта полноты {content.get('legacy_unknown_insights', 0)}"
             )
     quality = context.get("data_quality")
     if quality:
@@ -235,8 +235,8 @@ def format_context_for_ai(context: dict) -> str:
         if stories.get("partial_insights_stories") or stories.get("legacy_unknown_insights"):
             story_header.append(
                 f"Полнота Insights сторис: неполных — {stories.get('partial_insights_stories', 0)}; "
-                f"старых с неизвестной полнотой — {stories.get('legacy_unknown_insights', 0)} "
-                f"(старые сторис: полнота данных не подтверждена, это не «полные» данные)"
+                f"собраны до внедрения учёта полноты — {stories.get('legacy_unknown_insights', 0)} "
+                f"(данные этих сторис реальные, но полнота их метрик документально не подтверждена)"
             )
         story_rows = [
             f"  {s['date']}: 👁{s['views']} охват:{s['reach']} "

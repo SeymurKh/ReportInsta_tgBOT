@@ -10,7 +10,7 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 MEDIA_METRICS_MAP: dict[str, list[str]] = {
-    "IMAGE": ["reach", "likes", "comments", "saved", "total_interactions"],
+    "IMAGE": ["reach", "likes", "comments", "saved", "shares", "total_interactions"],
     "VIDEO": ["reach", "likes", "comments", "saved", "shares", "total_interactions", "views"],
     "CAROUSEL_ALBUM": ["reach", "likes", "comments", "saved", "shares", "total_interactions"],
     "REELS": ["reach", "likes", "comments", "saved", "shares", "total_interactions", "views"],

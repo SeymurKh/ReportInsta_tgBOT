@@ -100,12 +100,12 @@ class AIAnalyzer:
             if content_summary.get("partial_insights_posts") or content_summary.get("legacy_unknown_insights"):
                 quality_line += (
                     f"; неполные Insights публикаций: {content_summary.get('partial_insights_posts', 0)}; "
-                    f"старые публикации с неизвестной полнотой: {content_summary.get('legacy_unknown_insights', 0)}"
+                    f"собраны до внедрения учёта полноты: {content_summary.get('legacy_unknown_insights', 0)}"
                 )
             if stories_summary:
                 quality_line += (
                     f"; неполные Insights сторис: {stories_summary.get('partial_insights_stories', 0)}; "
-                    f"старые сторис с неизвестной полнотой: {stories_summary.get('legacy_unknown_insights', 0)}"
+                    f"собраны до внедрения учёта полноты: {stories_summary.get('legacy_unknown_insights', 0)}"
                 )
         current_followers = stats_summary.get("followers_current")
         follower_growth = stats_summary.get("followers_growth")
