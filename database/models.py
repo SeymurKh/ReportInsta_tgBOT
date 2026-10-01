@@ -53,7 +53,7 @@ class DailyStats(Base):
     metrics_present = Column(Text, nullable=True)  # JSON list; NULL means legacy/unknown
 
     # Instagram day-bucket boundaries (naive UTC) — the row's `date` is the
-    # label of this bucket in settings.DAY_BUCKET_TIMEZONE.
+    # Instagram insight day (UTC calendar day, stamped end_time = day 07:00).
     bucket_start = Column(DateTime, nullable=True)
     bucket_end = Column(DateTime, nullable=True)
 

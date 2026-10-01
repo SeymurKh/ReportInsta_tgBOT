@@ -3,7 +3,6 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 import aiohttp
 
@@ -55,23 +54,17 @@ REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=60)
 class DayBucket:
     """One Instagram insight day.
 
-    Instagram defines days as US Pacific calendar days: values[] end_time
-    points at the bucket END (07:00 UTC in summer, 08:00 UTC in winter), so
-    the app and our reports can share identical day labels.
+    A day D is the UTC calendar day [D 00:00, D+1 00:00); the API stamps its
+    value with end_time = D 07:00 UTC. Verified against the live API: the
+    time-series value equals total_value over exactly this window.
     """
     start: datetime  # naive UTC
     end: datetime    # naive UTC
-    label: date      # calendar date of the day in DAY_BUCKET_TIMEZONE
+    label: date      # the insight day (UTC calendar date)
 
     @property
     def day_key(self) -> str:
         return self.label.isoformat()
-
-
-def bucket_label(start: datetime) -> date:
-    """Calendar date of a bucket start in the reporting timezone."""
-    tz = ZoneInfo(settings.DAY_BUCKET_TIMEZONE)
-    return start.replace(tzinfo=timezone.utc).astimezone(tz).date()
 
 
 def _to_unix(dt: datetime) -> int:
@@ -256,51 +249,41 @@ class InstagramClient:
     async def get_day_buckets(
         self, since: datetime, until: datetime
     ) -> tuple[list[DayBucket], dict[str, dict[str, int]]]:
-        """Discover Instagram's own day buckets plus the time-series metrics.
+        """Discover Instagram's insight days plus the time-series metrics.
 
-        Returns (buckets, series); series maps metric name -> {day_key: value}
-        for time-series metrics (reach, follower_count). Day boundaries come
-        from the API's own end_time values, so every metric family can be
-        requested over exactly the same windows.
+        A day D is the UTC calendar day [D 00:00, D+1 00:00); values[] are
+        stamped with end_time = D 07:00 UTC. Returns (buckets, series) where
+        series maps metric name -> {day_key: value} for time-series metrics
+        (reach, follower_count). All metric families share these exact windows.
         """
         data = await self.get_account_insights(_to_unix(since), _to_unix(until))
-        ends: list[datetime] = []
-        raw_series: dict[str, dict[datetime, int]] = {}
+        labels: set[date] = set()
+        raw_series: dict[str, dict[date, int]] = {}
         for item in data.get("data", []):
             name = item.get("name")
-            values_by_end: dict[datetime, int] = {}
+            values_by_label: dict[date, int] = {}
             for val in item.get("values", []):
                 end_time = val.get("end_time")
                 if not end_time:
                     continue
                 try:
-                    end = parse_ig_timestamp(end_time)
+                    stamp = parse_ig_timestamp(end_time)
                 except (TypeError, ValueError):
                     logger.warning("Ignoring invalid insight end_time %s", end_time)
                     continue
-                values_by_end[end] = val.get("value", 0)
-                ends.append(end)
-            raw_series[name] = values_by_end
+                values_by_label[stamp.date()] = val.get("value", 0)
+                labels.add(stamp.date())
+            raw_series[name] = values_by_label
 
-        ends = sorted(set(ends))
         buckets: list[DayBucket] = []
-        for index, end in enumerate(ends):
-            previous = ends[index - 1] if index > 0 else None
-            if previous is not None and timedelta(0) < end - previous <= timedelta(hours=36):
-                start = previous
-            else:
-                start = end - timedelta(days=1)
-            buckets.append(DayBucket(start=start, end=end, label=bucket_label(start)))
+        for label in sorted(labels):
+            start = datetime(label.year, label.month, label.day)
+            buckets.append(DayBucket(start=start, end=start + timedelta(days=1), label=label))
 
-        series: dict[str, dict[str, int]] = {}
-        for name, values_by_end in raw_series.items():
-            by_label: dict[str, int] = {}
-            for bucket in buckets:
-                for end, value in values_by_end.items():
-                    if bucket.start < end <= bucket.end:
-                        by_label[bucket.day_key] = value
-                        break
-            series[name] = by_label
+        series: dict[str, dict[str, int]] = {
+            name: {label.isoformat(): value for label, value in values.items()}
+            for name, values in raw_series.items()
+        }
         return buckets, series
 
     async def get_account_totals(

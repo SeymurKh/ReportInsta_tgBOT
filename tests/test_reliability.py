@@ -375,9 +375,9 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(busy_timeout, 5000)
 
     async def test_day_buckets_follow_instagram_boundaries(self):
-        """Regression: Instagram days are its own buckets (values[] end_time at
-        07:00 UTC in summer — US Pacific midnight). All metric families must be
-        requested over these exact windows and share one day label."""
+        """Regression: Instagram's insight day D is the UTC calendar day; the
+        API stamps its value with end_time = D 07:00 UTC. Every metric family
+        must use these exact windows and share one day label."""
         from instagram.client import InstagramClient
 
         client = InstagramClient("user", "token")
@@ -394,12 +394,12 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
         buckets, series = await client.get_day_buckets(
             datetime(2026, 8, 31), datetime(2026, 9, 3)
         )
-        self.assertEqual([b.day_key for b in buckets], ["2026-08-31", "2026-09-01"])
-        self.assertEqual(buckets[0].start, datetime(2026, 8, 31, 7, 0))
-        self.assertEqual(buckets[0].end, datetime(2026, 9, 1, 7, 0))
-        self.assertEqual(series["reach"]["2026-08-31"], 601)
-        self.assertEqual(series["reach"]["2026-09-01"], 390)
-        self.assertEqual(series["follower_count"]["2026-09-01"], 2)
+        self.assertEqual([b.day_key for b in buckets], ["2026-09-01", "2026-09-02"])
+        self.assertEqual(buckets[0].start, datetime(2026, 9, 1, 0, 0))
+        self.assertEqual(buckets[0].end, datetime(2026, 9, 2, 0, 0))
+        self.assertEqual(series["reach"]["2026-09-01"], 601)
+        self.assertEqual(series["reach"]["2026-09-02"], 390)
+        self.assertEqual(series["follower_count"]["2026-09-02"], 2)
 
     async def test_save_daily_stats_persists_account_level_metrics(self):
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")

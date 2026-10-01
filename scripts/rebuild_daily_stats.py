@@ -1,4 +1,4 @@
-"""One-shot rebuild of daily stats using Instagram's own day buckets.
+﻿"""One-shot rebuild of daily stats using Instagram's own day buckets.
 
 Re-fetches every day bucket in the window with bucket-aligned total_value
 requests, overwrites daily rows (provenance included) and refreshes the
@@ -10,7 +10,11 @@ Usage:
 
 import argparse
 import asyncio
+import os
+import sys
 from datetime import datetime, timedelta
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import crud
 from database.engine import init_db
