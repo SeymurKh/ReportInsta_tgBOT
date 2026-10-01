@@ -1,20 +1,20 @@
-"""AI dialogue flow: ask questions about the generated report."""
+"""AI dialogue flow: ask questions about the generated report.
+
+AI dialogue is only reachable from the inline button under a generated report —
+the main menu has no "AI" entry on purpose: without report context there is
+nothing to ask about.
+"""
 import logging
-from datetime import date
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from database import crud
-from instagram.client import TokenExpiredError
-from reports.generator import generate_report
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from bot.states import AIForm
-from bot.keyboards import ai_calendar_kb, dialogue_kb, main_menu_kb
-from bot.helpers import send_report_result, send_excel
+from bot.keyboards import dialogue_kb, main_menu_kb
+from bot.helpers import send_excel
 from utils.formatters import format_context_for_ai
-from utils.timezones import app_today
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -30,32 +30,6 @@ async def _enter_dialogue(target_message: Message, state: FSMContext, context: d
     await state.update_data(report_context=context, dialogue_history=[])
     await state.set_state(AIForm.dialogue)
     await target_message.answer(DIALOGUE_HINT, reply_markup=dialogue_kb())
-
-
-# ── 💬 Вопрос нейронке (main menu) ──
-
-@router.message(F.text == "💬 Вопрос нейронке")
-async def ai_chat_start(message: Message, state: FSMContext):
-    data = await state.get_data()
-    context = data.get("report_context")
-
-    if context:
-        await _enter_dialogue(message, state, context)
-    else:
-        accounts = await crud.get_all_accounts()
-        if not accounts:
-            await message.answer("❌ Нет доступных аккаунтов.")
-            return
-        today = app_today()
-        await state.update_data(
-            selected_account=accounts[0].id,
-            ai_calendar_stage=1,
-        )
-        await state.set_state(AIForm.waiting_custom_dates)
-        await message.answer(
-            f"📅 Сначала соберу данные по @{accounts[0].username}. Выберите начало периода:",
-            reply_markup=ai_calendar_kb(today.year, today.month, 1, today),
-        )
 
 
 # ── 💬 Вопрос по отчёту (inline button after a report) ──
@@ -82,94 +56,6 @@ async def download_excel_callback(callback: CallbackQuery, state: FSMContext):
         return
     await callback.answer()
     await send_excel(callback.message, context, data.get("dialogue_history"))
-
-@router.callback_query(F.data.startswith("aical_"))
-async def ai_calendar_callback(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    stage = data.get("ai_calendar_stage")
-    if stage is None:
-        await callback.answer("Календарь устарел. Начните заново.", show_alert=True)
-        return
-    parts = callback.data.split("_")
-    today = app_today()
-    if parts[1] == "noop":
-        await callback.answer()
-        return
-    if parts[1] == "nav":
-        year, month, direction = int(parts[3]), int(parts[4]), int(parts[5])
-        month += direction
-        if month == 0:
-            year, month = year - 1, 12
-        elif month == 13:
-            year, month = year + 1, 1
-        await callback.message.edit_reply_markup(
-            reply_markup=ai_calendar_kb(year, month, stage, today)
-        )
-        await callback.answer()
-        return
-
-    selected = date(int(parts[3]), int(parts[4]), int(parts[5]))
-    if stage == 2 and selected < data["ai_from"]:
-        await callback.answer("Дата окончания не может быть раньше начала.", show_alert=True)
-        return
-    if stage == 1:
-        await state.update_data(ai_from=selected, ai_calendar_stage=2)
-        await callback.message.edit_text(
-            "Выберите конец периода:",
-            reply_markup=ai_calendar_kb(selected.year, selected.month, 2, today),
-        )
-        await callback.answer()
-        return
-
-    account = await crud.get_account_by_id(data.get("selected_account"))
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    await state.set_state(None)
-    await callback.answer()
-    await _report_then_dialogue(
-        callback.message, state, account,
-        custom_from=data["ai_from"], custom_to=selected,
-    )
-
-
-@router.message(AIForm.waiting_custom_dates)
-async def ai_custom_dates_handler(message: Message, state: FSMContext):
-    data = await state.get_data()
-    stage = data.get("ai_calendar_stage", 1)
-    today = app_today()
-    selected_month = data.get("ai_from") or today
-    await state.update_data(ai_calendar_stage=stage)
-    await message.answer(
-        "Выберите даты кнопками календаря — ввод периода текстом отключён.",
-        reply_markup=ai_calendar_kb(selected_month.year, selected_month.month, stage, today),
-    )
-
-
-async def _report_then_dialogue(message: Message, state: FSMContext, account,
-                                period: str = "week",
-                                custom_from: date = None, custom_to: date = None):
-    loading_msg = await message.answer("⏳ Собираю данные...")
-    try:
-        result = await generate_report(
-            account, period, custom_date_from=custom_from, custom_date_to=custom_to
-        )
-        await send_report_result(message, result, ask_question=False)
-        await _enter_dialogue(message, state, result.get("context", {}))
-    except TokenExpiredError:
-        await message.answer(
-            f"🔑 Токен аккаунта @{account.username} истёк.\n"
-            "Обновите access_token в INSTAGRAM_ACCOUNTS (.env) и перезапустите бота.",
-            parse_mode=None,
-        )
-    except Exception as e:
-        logger.error(f"AI period error: {e}", exc_info=True)
-        await message.answer(f"❌ Ошибка: {e}", parse_mode=None)
-    finally:
-        try:
-            await loading_msg.delete()
-        except Exception:
-            pass
 
 
 # ── Multi-turn dialogue (state = AIForm.dialogue) ──
@@ -225,4 +111,3 @@ async def ai_dialogue_handler(message: Message, state: FSMContext):
 @router.message(F.text)
 async def fallback_handler(message: Message):
     await message.answer("Используйте меню для выбора действия.", reply_markup=main_menu_kb())
-

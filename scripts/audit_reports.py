@@ -135,18 +135,9 @@ def _independent_totals(date_from, date_to, daily_rows, post_rows, story_rows):
             follower_start = None
         elif follower_start > 0:
             follower_pct = round(follower_growth / follower_start * 100, 1)
-    values = [r["follower_count"] or 0 for r in daily_rows]
-    if not follower_known:
-        trend = "unknown"
-    elif len(values) < 2:
-        trend = "stable"
-    else:
-        window = min(7, max(1, len(values) // 2))
-        baseline = values[-2 * window:-window]
-        recent = values[-window:]
-        baseline_avg, recent_avg = sum(baseline) / len(baseline), sum(recent) / len(recent)
-        diff_pct = (recent_avg - baseline_avg) / abs(baseline_avg) * 100 if baseline_avg else 0
-        trend = "growing" if diff_pct > 5 else "declining" if diff_pct < -5 else "stable"
+    from analytics.calculations import detect_trend
+    from types import SimpleNamespace as _NS
+    trend = detect_trend([_NS(**r) for r in daily_rows], "follower_count")
     post_reach = sum((r["reach"] or 0) for r in post_rows)
     post_interactions = sum((r["total_interactions"] or 0) for r in post_rows)
     return {
@@ -234,27 +225,57 @@ def _report_check_block(generated, account, independent, posts, stories):
                 else _latest_followers_fallback(account)
             ),
         }
-    from utils.formatters import format_growth, format_number, format_pct
-    from reports.generator import _interaction_reconciliation_note
+    from utils.formatters import format_number, format_pct
+    from reports.generator import (
+        _account_interaction_note, _interaction_reconciliation_note,
+        TYPE_EMOJI, TYPE_NAME, WEEKDAYS_RU,
+    )
+    from reports.naming import (
+        L_ENGAGED, L_FOLLOWERS_GROWTH, L_FOLLOWERS_NOW, L_POST_ER, L_POST_LIKES,
+        L_POST_REACH, L_POSTS, L_REACH, L_REACH_DAILY, L_STORIES_REACH,
+        L_STORIES_REPLIES, L_STORIES_SHARES, L_STORIES_VIEWS, L_VIEWS,
+        SEC_CONTENT, SEC_STORIES, kv_row,
+    )
     text = generated["text"]
     expected_note = _interaction_reconciliation_note(actual_content)
     checks["report_text_interaction_reconciliation"] = (
-        expected_note in text if expected_note else "⚠️ Контроль действий" not in text
+        expected_note in text if expected_note else "⚠️ Сверка взаимодействий" not in text
     )
+    def value_str(value):
+        return format_number(value) if value else "н/д"
+
+    growth = actual_stats["followers_growth"]
+    if growth is None:
+        growth_val = "н/д"
+    else:
+        growth_sign = "+" if growth >= 0 else ""
+        growth_val = f"{growth_sign}{format_number(growth)} ({format_pct(actual_stats['followers_growth_pct'])})"
+    formats_line = (
+        f"🎬 Reels {actual_content['total_reels']} · "
+        f"📷 Фото {actual_content['total_images']} · "
+        f"📸 Карусели {actual_content['total_carousels']}"
+    )
+    if actual_content["total_videos"]:
+        formats_line += f" · 🎥 Видео {actual_content['total_videos']}"
     report_markers = {
-        "current_followers": f"Текущие: {format_number(actual_stats['followers_current'])}",
-        "followers_growth": f"Прирост за период: {format_growth(actual_stats['followers_growth'])} ({format_pct(actual_stats['followers_growth_pct'])})",
-        "daily_reach": "Охват (аккаунты): " + (format_number(actual_stats["reach_total"]) if actual_stats["reach_total"] else "н/д"),
-        "daily_views": "Просмотры: " + (format_number(actual_stats["views_total"]) if actual_stats["views_total"] > 0 else "н/д"),
-        "daily_engaged": "Вовлечённые аккаунты (уникальные): " + (format_number(actual_stats["accounts_engaged_total"]) if actual_stats["accounts_engaged_total"] > 0 else "н/д"),
-        "daily_average_reach": f"Средний охват/день: {format_number(actual_stats['reach_avg_daily'])}",
-        "posts": f"📹 Контент ({actual_content['total_posts']} публикаций)",
-        "media_types": f"Reels: {actual_content['total_reels']} | Видео: {actual_content['total_videos']} | Фото: {actual_content['total_images']} | Карусели: {actual_content['total_carousels']}",
-        "average_likes_reach": f"Средние лайки: {actual_content['avg_likes']} | Средний охват: {actual_content['avg_reach']}",
-        "engagement_rate": f"{actual_content['engagement_rate']}% ({format_number(actual_content['total_interactions'])} / {format_number(actual_content['total_reach'])})",
+        "current_followers": kv_row(L_FOLLOWERS_NOW, value_str(actual_stats["followers_current"])),
+        "followers_growth": kv_row(L_FOLLOWERS_GROWTH, growth_val),
+        "daily_reach": kv_row(L_REACH, value_str(actual_stats["reach_total"])),
+        "daily_views": kv_row(L_VIEWS, value_str(actual_stats["views_total"])),
+        "daily_engaged": kv_row(L_ENGAGED, value_str(actual_stats["accounts_engaged_total"])),
+        "daily_average_reach": kv_row(L_REACH_DAILY, format_number(actual_stats["reach_avg_daily"])),
+        "posts_title": f"{SEC_CONTENT} ({actual_content['total_posts']})",
+        "posts_count": kv_row(L_POSTS, str(actual_content["total_posts"])),
+        "average_likes": kv_row(L_POST_LIKES, str(actual_content["avg_likes"])),
+        "average_reach": kv_row(L_POST_REACH, format_number(actual_content["avg_reach"])),
+        "engagement_rate": kv_row(L_POST_ER, f"{actual_content['engagement_rate']}%"),
+        "media_types": formats_line,
     }
     checks.update({f"report_text_{key}": marker in text for key, marker in report_markers.items()})
-    from reports.generator import TYPE_EMOJI, TYPE_NAME, WEEKDAYS_RU
+    account_note = _account_interaction_note(actual_stats)
+    checks["report_text_account_reconciliation"] = (
+        account_note in text if account_note else "Сверка взаимодействий аккаунта" not in text
+    )
     from utils.formatters import MONTHS_RU
     post_markers = []
     for post in posts:
@@ -283,9 +304,11 @@ def _report_check_block(generated, account, independent, posts, stories):
     )
     if actual_stories["total_stories"]:
         story_markers = (
-            f"📲 Сторис ({actual_stories['total_stories']})",
-            f"Просмотры: {format_number(actual_stories['total_views'])} (ср. {format_number(actual_stories['avg_views'])}/сторис)",
-            f"Охват: {format_number(actual_stories['total_reach'])} | Ответы: {format_number(actual_stories['total_replies'])} | Репосты: {format_number(actual_stories['total_shares'])}",
+            f"{SEC_STORIES} ({actual_stories['total_stories']})",
+            kv_row(L_STORIES_VIEWS, f"{format_number(actual_stories['total_views'])} (ср. {format_number(actual_stories['avg_views'])})"),
+            kv_row(L_STORIES_REACH, format_number(actual_stories["total_reach"])),
+            kv_row(L_STORIES_REPLIES, format_number(actual_stories["total_replies"])),
+            kv_row(L_STORIES_SHARES, format_number(actual_stories["total_shares"])),
         )
         checks["report_text_stories"] = all(marker in text for marker in story_markers)
     else:
@@ -453,7 +476,7 @@ async def _audit_comparisons_for_account(conn, username):
         avail2 = context["period_days"]["available2"]
         checks["available_days"] = avail1 == independent_1["days"] and avail2 == independent_2["days"]
         text = generated["text"]
-        checks["text_has_headers"] = "📊 Сравнение периодов" in text and "Охват в день" in text
+        checks["text_has_headers"] = "📊 Сравнение периодов" in text and "Средний охват в день" in text
         checks["text_has_format_perf"] = "Форматы контента:" in text
         results.append({
             "account": username,
@@ -501,7 +524,7 @@ async def _audit_edge_cases(conn, username):
     if not any(empty_from <= r.date <= empty_to for r in daily):
         generated = await _generate_report(account, [], None, [], [], empty_from, empty_to)
         checks["empty_period_renders"] = (
-            "0 публикаций" in generated["text"]
+            "ПУБЛИКАЦИИ (0)" in generated["text"]
             and generated["context"]["stats"]["reach_total"] == 0
         )
     else:

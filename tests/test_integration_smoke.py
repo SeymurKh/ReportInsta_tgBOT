@@ -164,7 +164,8 @@ def test_full_report_pipeline_builds_context_from_mocked_data():
     result = asyncio.run(run())
     context = result["context"]
     assert result["text"]
-    assert "Текущие: 1 234" in result["text"]
+    from reports.naming import L_FOLLOWERS_NOW, kv_row
+    assert kv_row(L_FOLLOWERS_NOW, "1 234") in result["text"]
     assert context["content"]["total_posts"] == 1
     assert context["top_posts"][0]["media_type"] == "REELS"
     assert context["format_performance"]["REELS"]["posts"] == 1
@@ -195,7 +196,8 @@ def test_comparison_report_handles_unknown_follower_growth():
 
     result = asyncio.run(run())
     assert result["context"]["period1"]["stats"]["followers_growth"] is None
-    assert "Прирост подписчиков: н/д (неполные данные)" in result["text"]
+    from reports.naming import L_FOLLOWERS_GROWTH, cmp_row
+    assert cmp_row(L_FOLLOWERS_GROWTH, "н/д", "н/д", "н/д") in result["text"]
 
 
 def test_report_survives_skipped_sync_result_shape():

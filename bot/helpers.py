@@ -39,13 +39,44 @@ def split_message_text(text: str, max_len: int = MAX_MESSAGE_LEN) -> list[str]:
     return chunks
 
 
+FENCE = "```"
+
+
+def split_fenced_segments(text: str) -> list[tuple[bool, str]]:
+    """Split report text into (is_monospace, body) segments at ``` fences.
+
+    Tables are rendered as monospace blocks so their columns stay aligned in
+    Telegram; everything else is sent as ordinary text.
+    """
+    segments: list[tuple[bool, str]] = []
+    current: list[str] = []
+    mono = False
+    for line in text.split("\n"):
+        if line.strip() == FENCE:
+            segments.append((mono, "\n".join(current)))
+            current = []
+            mono = not mono
+        else:
+            current.append(line)
+    segments.append((mono, "\n".join(current)))
+    return segments
+
+
 async def send_long_text(message: Message, text: str) -> None:
     if not text or not text.strip():
         await message.answer("⚠️ Не удалось сформировать текстовый отчёт.", parse_mode=None)
         return
-    for chunk in split_message_text(text):
-        if chunk.strip():
-            await message.answer(chunk, parse_mode=None)
+    for is_mono, body in split_fenced_segments(text):
+        body = body.strip("\n")
+        if not body.strip():
+            continue
+        for chunk in split_message_text(body):
+            if not chunk.strip():
+                continue
+            if is_mono:
+                await message.answer(f"{FENCE}\n{chunk}\n{FENCE}", parse_mode="Markdown")
+            else:
+                await message.answer(chunk, parse_mode=None)
 
 
 async def send_charts(message: Message, charts: dict) -> None:

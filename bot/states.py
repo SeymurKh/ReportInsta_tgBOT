@@ -10,5 +10,4 @@ class ComparisonForm(StatesGroup):
 
 
 class AIForm(StatesGroup):
-    waiting_custom_dates = State()
     dialogue = State()

@@ -205,7 +205,7 @@ def generate_excel_report(
     ws2 = wb.create_sheet("По дням")
     ws2.sheet_properties.tabColor = BLUE
     _title(ws2, "Динамика по дням", f"@{account_username}  •  {period_str}", 5)
-    for col, header in enumerate(["Дата", "Охват", "Прирост", "Просмотры", "Вовлечено"], 1):
+    for col, header in enumerate(["Дата", "Охват (уникальные)", "Прирост подписчиков", "Просмотры (с повторами)", "Вовлечённые (уникальные)"], 1):
         _hs(ws2.cell(row=4, column=col, value=header))
         ws2.column_dimensions[get_column_letter(col)].width = 18
     for i, data in enumerate(daily_stats, 5):
@@ -254,7 +254,7 @@ def generate_excel_report(
         _ss(ws_s["A4"])
         for col in (1, 2):
             ws_s.cell(row=4, column=col).border = THIN_BORDER
-        story_metrics = [("Всего сторис", "total_stories"), ("Просмотры (итого)", "total_views"), ("Просмотры (средние)", "avg_views"), ("Охват (итого)", "total_reach"), ("Охват (средний)", "avg_reach"), ("Ответы", "total_replies"), ("Репосты", "total_shares"), ("Переходы в профиль", "total_profile_activity"), ("Подписки со сторис", "total_follows"), ("Выходы, %", "exit_rate"), ("Тапы вперёд", "tap_forward_total"), ("Тапы назад", "tap_back_total")]
+        story_metrics = [("Количество сторис", "total_stories"), ("Просмотры (суммарно, с повторами)", "total_views"), ("Средние просмотры на сторис", "avg_views"), ("Охват (сумма по сторис)", "total_reach"), ("Средний охват на сторис", "avg_reach"), ("Ответы", "total_replies"), ("Репосты", "total_shares"), ("Переходы в профиль", "total_profile_activity"), ("Подписки со сторис", "total_follows"), ("Доля выходов, %", "exit_rate"), ("Пролистнули вперёд", "tap_forward_total"), ("Вернулись назад", "tap_back_total")]
         for i, (label, key) in enumerate(story_metrics, 5):
             ws_s.cell(row=i, column=1, value=label)
             ws_s.cell(row=i, column=2, value=stories_summary.get(key, 0))
@@ -306,7 +306,7 @@ def generate_excel_report(
         for col, header in enumerate(["Показатель", "Период 1", "Период 2"], 1):
             _hs(ws_cmp.cell(row=4, column=col, value=header))
         p1, p2 = comparison_periods
-        metric_groups = [("Статистика", [("Прирост подписчиков", "followers_growth"), ("Охват", "reach_total"), ("Просмотры", "views_total"), ("Вовлечено", "accounts_engaged_total")], "stats"), ("Контент", [("Публикации", "total_posts"), ("Лайки", "total_likes"), ("Комментарии", "total_comments"), ("ER %", "engagement_rate")], "content"), ("Stories", [("Количество", "total_stories"), ("Просмотры", "total_views"), ("Ответы", "total_replies")], "stories")]
+        metric_groups = [("Статистика", [("Прирост подписчиков за период", "followers_growth"), ("Охват (уникальные)", "reach_total"), ("Просмотры (с повторами)", "views_total"), ("Вовлечённые (уникальные)", "accounts_engaged_total")], "stats"), ("Контент", [("Публикации", "total_posts"), ("Лайки публикаций", "total_likes"), ("Комментарии публикаций", "total_comments"), ("ER публикаций, %", "engagement_rate")], "content"), ("Сторис", [("Количество сторис", "total_stories"), ("Просмотры (с повторами)", "total_views"), ("Ответы", "total_replies")], "stories")]
         row = 5
         for group, metrics, key in metric_groups:
             ws_cmp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)

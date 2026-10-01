@@ -11,6 +11,18 @@ from analytics.calculations import (
     compare_content_formats, daily_peaks, data_quality_summary, metric_is_present,
 )
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
+from reports.naming import (
+    FENCE, L_ACCOUNT_ER, L_ENGAGED, L_ENGAGED_DAILY, L_FOLLOWERS_GROWTH,
+    L_FOLLOWERS_NOW, L_INTERACTIONS, L_POST_COMMENTS_TOTAL, L_POST_ER,
+    L_POST_LIKES, L_POST_LIKES_TOTAL, L_POST_REACH, L_POST_SAVES_TOTAL,
+    L_POST_SHARES_TOTAL, L_POSTS, L_PROFILE_VIEWS, L_REACH, L_REACH_DAILY,
+    L_STORIES_BACK, L_STORIES_COUNT, L_STORIES_EXIT, L_STORIES_FOLLOWS,
+    L_STORIES_FORWARD, L_STORIES_PROFILE, L_STORIES_REACH, L_STORIES_REPLIES,
+    L_STORIES_SHARES, L_STORIES_VIEWS, L_TREND, L_VIEWS, L_VIEWS_DAILY,
+    NOTE_ACCOUNT_GAP, NOTE_GROWTH, NOTE_POST_GAP, NOTE_TERMS,
+    SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_PLAIN,
+    cmp_row, mono_block, table_section,
+)
 from reports.charts import (
     create_followers_chart, create_metrics_chart,
     create_stories_chart, create_comparison_chart,
@@ -124,13 +136,30 @@ def _interaction_reconciliation_note(content_summary: dict, period: str = "") ->
     label = f" за {period}" if period else ""
     difference = format_number(abs(gap))
     signed_difference = f"+{difference}" if gap > 0 else f"-{difference}"
-    return (
-        f"⚠️ Контроль действий{label}: сумма лайков, комментариев, сохранений и репостов "
-        f"({format_number(content_summary.get('component_interactions', 0) or 0)}) "
-        f"не совпадает с total_interactions Insights "
-        f"({format_number(content_summary.get('total_interactions', 0) or 0)}; "
-        f"разница {signed_difference}). Метрики показаны по источникам отдельно; "
-        "ER рассчитан по total_interactions."
+    return NOTE_POST_GAP.format(
+        label=label,
+        components=format_number(content_summary.get("component_interactions", 0) or 0),
+        total=format_number(content_summary.get("total_interactions", 0) or 0),
+        signed=signed_difference,
+    )
+
+
+def _account_interaction_note(stats_summary: dict) -> str:
+    """Explain why account interactions exceed the visible ❤/💬/💾/📤 sum."""
+    total = stats_summary.get("total_interactions_total")
+    likes = stats_summary.get("likes_total")
+    comments = stats_summary.get("comments_total")
+    saves = stats_summary.get("saves_total")
+    shares = stats_summary.get("shares_total")
+    if total is None or None in (likes, comments, saves, shares):
+        return ""
+    components = likes + comments + saves + shares
+    if total <= components:
+        return ""
+    return NOTE_ACCOUNT_GAP.format(
+        components=format_number(components),
+        total=format_number(total),
+        gap=f"+{format_number(total - components)}",
     )
 
 # ────────────────────── Stories helpers ──────────────────────
@@ -155,29 +184,22 @@ def _stories_to_dicts(stories_list: list) -> list[dict]:
     } for s in stories_list]
 
 
-def _stories_section_text(stories_summary: dict, stories_list: list) -> str:
+def _stories_footer_text(stories_summary: dict, stories_list: list) -> str:
+    """Best-story line (or the empty-period explanation)."""
     if not stories_summary.get("total_stories"):
         return (
-            "📲 Сторис\n"
             "За период сторис не найдены. Если сторис были — сбор данных "
             "начался недавно: историю сторис Instagram API не отдаёт, "
             "бот собирает их каждые несколько часов с момента запуска."
         )
-    lines = [
-        f"📲 Сторис ({stories_summary['total_stories']})",
-        f"Просмотры: {format_number(stories_summary['total_views'])} (ср. {format_number(stories_summary['avg_views'])}/сторис)",
-        f"Охват: {format_number(stories_summary['total_reach'])} | Ответы: {format_number(stories_summary['total_replies'])} | Репосты: {format_number(stories_summary['total_shares'])}",
-        f"Переходы в профиль: {format_number(stories_summary['total_profile_activity'])} | Подписки: {format_number(stories_summary['total_follows'])}",
-        f"Выходы: {stories_summary['exit_rate']}% | Листали дальше: {format_number(stories_summary['tap_forward_total'])} | Вернулись: {format_number(stories_summary['tap_back_total'])}",
-    ]
     best = get_best_story(stories_list)
-    if best and best.views > 0:
-        day = best.timestamp
-        lines.append(
-            f"🏆 Лучшая сторис: {day.day} {MONTHS_RU[day.month]} — "
-            f"👁 {format_number(best.views)} | Охват {format_number(best.reach)} | 💬 {best.replies}"
-        )
-    return "\n".join(lines)
+    if not best or best.views <= 0:
+        return ""
+    day = best.timestamp
+    return (
+        f"🏆 Лучшая сторис: {day.day} {MONTHS_RU[day.month]} — "
+        f"👁 {format_number(best.views)} | Охват {format_number(best.reach)} | 💬 {best.replies}"
+    )
 
 
 def _stories_chart(stories_list: list) -> bytes | None:
@@ -257,17 +279,6 @@ async def generate_report(
     else:
         ai_analysis = AI_UNAVAILABLE_TEXT
 
-    trend_map = {
-        "growing": "📈 Растущий", "declining": "📉 Снижающийся",
-        "stable": "➡️ Стабильный", "unknown": "н/д (неполные данные)",
-    }
-    trend_window = min(7, max(1, len(stats_list) // 2)) if len(stats_list) > 1 else 0
-    if len(stats_list) >= 14:
-        trend_label = f"Краткосрочный тренд (последние {trend_window} дн. к предыдущим {trend_window} дн.)"
-    elif trend_window:
-        trend_label = f"Краткосрочный тренд (сравнение окон по {trend_window} дн.)"
-    else:
-        trend_label = "Краткосрочный тренд"
     def metric_str(key: str) -> str:
         value = stats_summary.get(key)
         return format_number(value) if value else "н/д"
@@ -305,40 +316,79 @@ async def generate_report(
             calendar_lines.append(f"  ❤️ {p.likes} | 💬 {p.comments} | 💾 {p.saved} | 📤 {p.shares} | Охват {format_number(p.reach)}")
 
     publications_text = "\n".join(calendar_lines) if calendar_lines else "Нет публикаций за период"
-    stories_text = _stories_section_text(stories_summary, stories_list)
 
-    report_text = f"""📱 @{account.username} — {account.name}
-📅 Период: {period_str}
+    stories_footer = _stories_footer_text(stories_summary, stories_list)
 
-👥 Подписчики
-Текущие: {format_number(current_followers) if current_followers is not None else 'н/д'}
-Прирост за период: {format_growth(stats_summary['followers_growth'])} ({format_pct(stats_summary['followers_growth_pct'])})
-{trend_label}: {trend_map.get(trend, trend)}
+    growth = stats_summary["followers_growth"]
+    if growth is None:
+        growth_val = "н/д"
+    else:
+        growth_sign = "+" if growth >= 0 else ""
+        growth_val = f"{growth_sign}{format_number(growth)} ({format_pct(stats_summary['followers_growth_pct'])})"
 
-📈 Охват и активность (Instagram API, уникальные за период)
-Охват (аккаунты): {reach_str}
-Просмотры: {views_str}
-Вовлечённые аккаунты (уникальные): {accounts_engaged_str}
-Взаимодействия: {interactions_str} (❤ {likes_str} | 💬 {comments_str} | 💾 {saves_str} | 📤 {shares_str})
-Просмотры профиля: {profile_views_str}
-Вовлечённость аккаунта (взаимодействия/охват): {account_er_str}%
-Средний охват/день: {format_number(stats_summary['reach_avg_daily'])}
+    tables = [
+        table_section(SEC_FOLLOWERS, [
+            (L_FOLLOWERS_NOW, format_number(current_followers) if current_followers is not None else "н/д"),
+            (L_FOLLOWERS_GROWTH, growth_val),
+            (L_TREND, TREND_PLAIN.get(trend, trend)),
+        ]),
+        table_section(SEC_ACTIVITY, [
+            (L_REACH, reach_str),
+            (L_VIEWS, views_str),
+            (L_ENGAGED, accounts_engaged_str),
+            (L_INTERACTIONS, interactions_str),
+            (L_PROFILE_VIEWS, profile_views_str),
+            (L_ACCOUNT_ER, f"{account_er_str}%"),
+            (L_REACH_DAILY, format_number(stats_summary["reach_avg_daily"])),
+        ]),
+        table_section(f"{SEC_CONTENT} ({content_summary['total_posts']})", [
+            (L_POSTS, str(content_summary["total_posts"])),
+            (L_POST_LIKES, str(content_summary["avg_likes"])),
+            (L_POST_REACH, format_number(content_summary["avg_reach"])),
+            (L_POST_ER, f"{content_summary['engagement_rate']}%"),
+        ]),
+    ]
+    if stories_summary.get("total_stories"):
+        tables.append(table_section(
+            f"{SEC_STORIES} ({stories_summary['total_stories']})",
+            [
+                (L_STORIES_VIEWS, f"{format_number(stories_summary['total_views'])} (ср. {format_number(stories_summary['avg_views'])})"),
+                (L_STORIES_REACH, format_number(stories_summary["total_reach"])),
+                (L_STORIES_REPLIES, format_number(stories_summary["total_replies"])),
+                (L_STORIES_SHARES, format_number(stories_summary["total_shares"])),
+                (L_STORIES_PROFILE, format_number(stories_summary["total_profile_activity"])),
+                (L_STORIES_FOLLOWS, format_number(stories_summary["total_follows"])),
+                (L_STORIES_EXIT, f"{stories_summary['exit_rate']}%"),
+                (L_STORIES_FORWARD, format_number(stories_summary["tap_forward_total"])),
+                (L_STORIES_BACK, format_number(stories_summary["tap_back_total"])),
+            ],
+        ))
 
-📹 Контент ({content_summary['total_posts']} публикаций)
-Reels: {content_summary['total_reels']} | Видео: {content_summary['total_videos']} | Фото: {content_summary['total_images']} | Карусели: {content_summary['total_carousels']}
-Средние лайки: {content_summary['avg_likes']} | Средний охват: {content_summary['avg_reach']}
-Вовлечённость (ER по total_interactions Insights / охвату публикаций): {content_summary['engagement_rate']}% ({format_number(content_summary['total_interactions'])} / {format_number(content_summary['total_reach'])})
+    formats_line = (
+        f"🎬 Reels {content_summary['total_reels']} · "
+        f"📷 Фото {content_summary['total_images']} · "
+        f"📸 Карусели {content_summary['total_carousels']}"
+    )
+    if content_summary["total_videos"]:
+        formats_line += f" · 🎥 Видео {content_summary['total_videos']}"
 
-{stories_text}
+    notes = [
+        f"из них: ❤ {likes_str} · 💬 {comments_str} · 💾 {saves_str} · 📤 {shares_str}",
+        f"Форматы публикаций: {formats_line}",
+        NOTE_TERMS,
+        NOTE_GROWTH,
+        _account_interaction_note(stats_summary),
+        stories_footer,
+    ]
 
-📋 Публикации
-{publications_text}
-
-🏆 Лучший пост по оценке взаимодействий с учётом охвата
-{best_info}
-
-🤖 AI-анализ
-{ai_analysis}"""
+    report_text = "\n\n".join(part for part in [
+        f"📱 @{account.username} — {account.name}\n📅 Период: {period_str}",
+        mono_block(tables),
+        "\n".join(note for note in notes if note),
+        f"📋 Публикации\n{publications_text}",
+        f"🏆 Лучший пост (максимум взвешенных взаимодействий на охват: лайки + 2×коммент. + 3×сохран. + 4×репосты)\n{best_info}",
+        f"🤖 AI-анализ\n{ai_analysis}",
+    ] if part)
 
     report_text += _warnings_block(
         fetch_info.get("api_delay_dates", []), fetch_info.get("partial", False)
@@ -513,17 +563,6 @@ async def generate_comparison_periods_report(
         pct = round(d / v1 * 100, 1) if v1 > 0 else None
         return d, pct
 
-    def diff_str(label, v1, v2):
-        d, pct = diff(v1, v2)
-        if d is None:
-            return f"ℹ️ {label}: н/д (неполные данные)"
-        sign = "+" if d >= 0 else ""
-        pct_str = f" ({sign}{pct:.1f}%)" if pct is not None else ""
-        emoji = "📈" if d > 0 else ("📉" if d < 0 else "➡️")
-        if isinstance(v1, float):
-            return f"{emoji} {label}: {v1:.1f} → {v2:.1f} ({sign}{d:.1f}{pct_str})"
-        return f"{emoji} {label}: {format_number(v1)} → {format_number(v2)} ({sign}{format_number(d)}{pct_str})"
-
     def daily_average(summary, available_days, field):
         """Normalize a period total by calendar days, preserving missing data."""
         total = summary[field]
@@ -540,29 +579,49 @@ async def generate_comparison_periods_report(
     p1_engaged_daily = daily_average(s1, p1_available, "accounts_engaged_total")
     p2_engaged_daily = daily_average(s2, p2_available, "accounts_engaged_total")
 
+    def cmp_line(label, v1, v2):
+        d, pct = diff(v1, v2)
+        if d is None:
+            return cmp_row(label, "н/д", "н/д", "н/д")
+        fmt = (lambda v: f"{v:.1f}") if isinstance(v1, float) else (lambda v: format_number(v))
+        sign = "+" if d >= 0 else ""
+        pct_str = f" ({sign}{pct:.1f}%)" if pct is not None else ""
+        return cmp_row(label, fmt(v1), fmt(v2), f"{sign}{fmt(d)}{pct_str}")
+
+    header = cmp_row("Показатель", "П1", "П2", "Δ")
+    divider = "─" * 52
+    cmp_tables = [
+        "\n".join([
+            SEC_ACTIVITY, divider, header,
+            cmp_line(L_FOLLOWERS_GROWTH, s1["followers_growth"], s2["followers_growth"]),
+            cmp_line(L_REACH, s1["reach_total"], s2["reach_total"]),
+            cmp_line(L_REACH_DAILY, p1_reach_daily, p2_reach_daily),
+            cmp_line(L_VIEWS, s1["views_total"], s2["views_total"]),
+            cmp_line(L_VIEWS_DAILY, p1_views_daily, p2_views_daily),
+            cmp_line(L_ENGAGED, s1["accounts_engaged_total"], s2["accounts_engaged_total"]),
+            cmp_line(L_ENGAGED_DAILY, p1_engaged_daily, p2_engaged_daily),
+        ]),
+        "\n".join([
+            SEC_CONTENT, divider, header,
+            cmp_line(L_POSTS, c1["total_posts"], c2["total_posts"]),
+            cmp_line(L_POST_LIKES_TOTAL, c1["total_likes"], c2["total_likes"]),
+            cmp_line(L_POST_COMMENTS_TOTAL, c1["total_comments"], c2["total_comments"]),
+            cmp_line(L_POST_SAVES_TOTAL, c1["total_saves"], c2["total_saves"]),
+            cmp_line(L_POST_SHARES_TOTAL, c1["total_shares"], c2["total_shares"]),
+            cmp_line(L_POST_ER, c1["engagement_rate"], c2["engagement_rate"]),
+        ]),
+        "\n".join([
+            SEC_STORIES, divider, header,
+            cmp_line(L_STORIES_COUNT, st1["total_stories"], st2["total_stories"]),
+            cmp_line(L_STORIES_VIEWS, st1["total_views"], st2["total_views"]),
+            cmp_line(L_STORIES_REPLIES, st1["total_replies"], st2["total_replies"]),
+        ]),
+    ]
+
     lines = [
-        f"📊 Сравнение периодов: {p1_str} vs {p2_str}\n",
+        f"📊 Сравнение периодов: {p1_str} → {p2_str}",
         f"Данные: период 1 — {p1_available}/{period1_days} дн., период 2 — {p2_available}/{period2_days} дн.",
-        diff_str("Прирост подписчиков", s1["followers_growth"], s2["followers_growth"]),
-        "",
-        diff_str("Охват (итого)", s1["reach_total"], s2["reach_total"]),
-        diff_str("Охват в день", p1_reach_daily, p2_reach_daily),
-        diff_str("Просмотры (итого)", s1["views_total"], s2["views_total"]),
-        diff_str("Просмотры в день", p1_views_daily, p2_views_daily),
-        diff_str("Вовлечено аккаунтов", s1["accounts_engaged_total"], s2["accounts_engaged_total"]),
-        diff_str("Вовлечено в день", p1_engaged_daily, p2_engaged_daily),
-        "",
-        diff_str("Публикаций", c1["total_posts"], c2["total_posts"]),
-        diff_str("Лайки (итого)", c1["total_likes"], c2["total_likes"]),
-        diff_str("Комменты (итого)", c1["total_comments"], c2["total_comments"]),
-        diff_str("Сохранения (итого)", c1["total_saves"], c2["total_saves"]),
-        diff_str("Репосты (итого)", c1["total_shares"], c2["total_shares"]),
-        "",
-        diff_str("Вовлечённость (ER%)", c1["engagement_rate"], c2["engagement_rate"]),
-        "",
-        diff_str("Сторис", st1["total_stories"], st2["total_stories"]),
-        diff_str("Просмотры сторис", st1["total_views"], st2["total_views"]),
-        diff_str("Ответы на сторис", st1["total_replies"], st2["total_replies"]),
+        mono_block(cmp_tables),
     ]
 
     lines.append("")
@@ -685,11 +744,11 @@ async def generate_daily_digest(account, target_date: date | None = None) -> str
     stories_summary = calculate_stories_summary(stories_list)
 
     return (
-        f"@{account.username}: 👥 {format_growth(summary['followers_growth'])} "
-        f"(сейчас {format_number(current_followers) if current_followers is not None else 'н/д'}), "
-        f"охват {format_number(summary['reach_total'])}, "
-        f"просмотры {format_number(summary['views_total'])}, "
-        f"постов: {len(posts_list)}, "
-        f"сторис: {stories_summary['total_stories']} "
+        f"@{account.username}: {format_growth(summary['followers_growth'])} подписчиков "
+        f"(сейчас {format_number(current_followers) if current_followers is not None else 'н/д'}); "
+        f"охват (уникальные) {format_number(summary['reach_total'])}; "
+        f"просмотры {format_number(summary['views_total'])}; "
+        f"публикаций {len(posts_list)}; "
+        f"сторис {stories_summary['total_stories']} "
         f"(👁 {format_number(stories_summary['total_views'])})"
     )
