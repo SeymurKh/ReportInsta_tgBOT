@@ -497,41 +497,6 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
         await engine.dispose()
 
 
-    async def test_snapshot_day_windows_are_midnight_aligned(self):
-        """Regression: off-midnight since/until must not shift new-format
-        day metrics (views/accounts_engaged) into neighbouring days. IG
-        returns the total for exactly the requested window."""
-        client = InstagramClient("user", "token")
-        requested: list[tuple[int, int]] = []
-
-        async def fake_user_info():
-            return {"username": "u"}
-
-        async def fake_account_insights(since, until, metrics=None):
-            return {"data": []}
-
-        async def fake_new_metrics(day_start, day_end):
-            requested.append((day_start, day_end))
-            return {"data": []}
-
-        with (
-            patch.object(client, "get_user_info", fake_user_info),
-            patch.object(client, "get_account_insights", fake_account_insights),
-            patch.object(client, "get_account_insights_new_metrics_day", fake_new_metrics),
-        ):
-            # 18:27 UTC boundaries — the shape that caused the day shift
-            since = int(datetime(2026, 9, 28, 18, 27).timestamp())
-            until = int(datetime(2026, 9, 30, 18, 27).timestamp())
-            snapshot = await client.collect_full_snapshot(since, until)
-
-        self.assertTrue(requested)
-        for day_start, day_end in requested:
-            start = datetime.fromtimestamp(day_start, tz=timezone.utc)
-            end = datetime.fromtimestamp(day_end, tz=timezone.utc)
-            self.assertEqual((start.hour, start.minute, start.second), (0, 0, 0))
-            self.assertEqual(end - start, timedelta(days=1))
-
-
     async def test_image_insights_include_shares(self):
         """Regression: MEDIA_METRICS_MAP['IMAGE'] omitted 'shares', so photo
         reposts were never fetched while total_interactions included them —

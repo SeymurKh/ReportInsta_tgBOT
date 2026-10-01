@@ -60,16 +60,6 @@ async def get_account_by_id(account_id: int) -> Optional[Account]:
         return result.scalar_one_or_none()
 
 
-async def update_account_token(instagram_user_id: str, new_token: str) -> None:
-    async with async_session_factory() as session:
-        await session.execute(
-            update(Account)
-            .where(Account.instagram_user_id == instagram_user_id)
-            .values(access_token=new_token, updated_at=datetime.now(timezone.utc).replace(tzinfo=None))
-        )
-        await session.commit()
-
-
 async def update_current_followers(
     account_id: int, followers: int, observed_at: datetime
 ) -> None:
@@ -616,14 +606,6 @@ async def get_posts(
             .order_by(Post.timestamp.desc())
         )
         return list(result.scalars().all())
-
-
-async def get_post_by_media_id(media_id: str) -> Optional[Post]:
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(Post).where(Post.instagram_media_id == media_id)
-        )
-        return result.scalar_one_or_none()
 
 
 # ────────────────────── Period snapshots ──────────────────────
