@@ -1,6 +1,6 @@
 """AI dialogue flow: ask questions about the generated report."""
 import logging
-from datetime import date, datetime, timezone
+from datetime import date
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -12,8 +12,9 @@ from reports.generator import generate_report
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from bot.states import AIForm
 from bot.keyboards import ai_calendar_kb, dialogue_kb, main_menu_kb
-from bot.helpers import send_report_result, send_excel, parse_period_input
+from bot.helpers import send_report_result, send_excel
 from utils.formatters import format_context_for_ai
+from utils.timezones import app_today
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -45,14 +46,14 @@ async def ai_chat_start(message: Message, state: FSMContext):
         if not accounts:
             await message.answer("❌ Нет доступных аккаунтов.")
             return
-        today = datetime.now(timezone.utc).date()
+        today = app_today()
         await state.update_data(
             selected_account=accounts[0].id,
             ai_calendar_stage=1,
         )
         await state.set_state(AIForm.waiting_custom_dates)
         await message.answer(
-            "📅 Сначала соберу данные. Выберите начало периода:",
+            f"📅 Сначала соберу данные по @{accounts[0].username}. Выберите начало периода:",
             reply_markup=ai_calendar_kb(today.year, today.month, 1, today),
         )
 
@@ -82,46 +83,6 @@ async def download_excel_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await send_excel(callback.message, context, data.get("dialogue_history"))
 
-# ── AI period selection (when there is no report context yet) ──
-
-@router.callback_query(F.data.startswith("ai_period_"))
-async def ai_period_callback(callback: CallbackQuery, state: FSMContext):
-    period = callback.data.split("_")[2]  # week/month/custom
-    data = await state.get_data()
-    account_id = data.get("selected_account")
-
-    if account_id:
-        account = await crud.get_account_by_id(account_id)
-    else:
-        accounts = await crud.get_all_accounts()
-        if not accounts:
-            await callback.answer("❌ Нет аккаунтов.", show_alert=True)
-            return
-        account = accounts[0]
-        await state.update_data(selected_account=account.id)
-
-    if not account:
-        await callback.answer("⚠️ Аккаунт не найден.", show_alert=True)
-        return
-
-    if period == "custom":
-        await state.set_state(AIForm.waiting_custom_dates)
-        await callback.message.edit_text(
-            "📅 Введите дату или период:\n"
-            "ДД.ММ (конкретный день) или ДД.ММ-ДД.ММ (период)\n"
-            "Например: 15.09 или 01.09-15.09",
-        )
-        await callback.answer()
-        return
-
-    await callback.answer()
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await _report_then_dialogue(callback.message, state, account, period=period)
-
-
 @router.callback_query(F.data.startswith("aical_"))
 async def ai_calendar_callback(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -130,7 +91,7 @@ async def ai_calendar_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Календарь устарел. Начните заново.", show_alert=True)
         return
     parts = callback.data.split("_")
-    today = datetime.now(timezone.utc).date()
+    today = app_today()
     if parts[1] == "noop":
         await callback.answer()
         return
@@ -176,43 +137,13 @@ async def ai_calendar_callback(callback: CallbackQuery, state: FSMContext):
 async def ai_custom_dates_handler(message: Message, state: FSMContext):
     data = await state.get_data()
     stage = data.get("ai_calendar_stage", 1)
-    today = datetime.now(timezone.utc).date()
+    today = app_today()
     selected_month = data.get("ai_from") or today
     await state.update_data(ai_calendar_stage=stage)
     await message.answer(
         "Выберите даты кнопками календаря — ввод периода текстом отключён.",
         reply_markup=ai_calendar_kb(selected_month.year, selected_month.month, stage, today),
     )
-    return
-
-    data = await state.get_data()
-    account_id = data.get("selected_account")
-
-    account = await crud.get_account_by_id(account_id) if account_id else None
-    if not account:
-        accounts = await crud.get_all_accounts()
-        if not accounts:
-            await state.set_state(None)
-            await message.answer("❌ Нет аккаунтов.")
-            return
-        account = accounts[0]
-        await state.update_data(selected_account=account.id)
-
-    try:
-        date_from, date_to = parse_period_input(
-            message.text, datetime.now(timezone.utc).date()
-        )
-    except ValueError:
-        # State is NOT cleared — user can retry immediately
-        await message.answer(
-            "❌ Неверный формат. Попробуйте ещё раз:\n"
-            "ДД.ММ или ДД.ММ-ДД.ММ (например: 15.09 или 01.09-15.09)"
-        )
-        return
-
-    await state.set_state(None)
-    await _report_then_dialogue(message, state, account,
-                                custom_from=date_from, custom_to=date_to)
 
 
 async def _report_then_dialogue(message: Message, state: FSMContext, account,

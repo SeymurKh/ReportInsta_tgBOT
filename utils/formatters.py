@@ -37,12 +37,6 @@ def format_growth(n: int | float | None) -> str:
     return f"📉 {format_number(n)}"
 
 
-def truncate_text(text: str, max_len: int = 4096) -> str:
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 3] + "..."
-
-
 AI_CONTEXT_MAX_CHARS = 14000
 _OMISSION_TEMPLATE = "…[опущено {count} из {total} {noun} — полные данные в отчёте и Excel]"
 _CONTEXT_CUT_MARKER = "\n…[контекст сокращён — полные данные в отчёте и Excel]"

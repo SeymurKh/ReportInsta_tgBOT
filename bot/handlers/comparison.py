@@ -1,6 +1,6 @@
-"""Period comparison flow (calendar weeks/months + custom dates)."""
+"""Period comparison flow (custom dates selected via calendar)."""
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -11,40 +11,11 @@ from instagram.client import TokenExpiredError
 from reports.generator import generate_comparison_periods_report
 from bot.states import ComparisonForm
 from bot.keyboards import comparison_calendar_kb
-from bot.helpers import send_report_result, parse_comparison_input
+from bot.helpers import send_report_result
+from utils.timezones import app_today
 
 logger = logging.getLogger(__name__)
 router = Router()
-
-
-def _calendar_weeks(today: date) -> tuple[date, date, date, date]:
-    """This calendar week (Mon..yesterday) vs previous full week (Mon..Sun).
-    On Monday, compares the two previous full weeks instead."""
-    this_monday = today - timedelta(days=today.weekday())
-    if this_monday > today - timedelta(days=1):
-        # Today is Monday — "this week" is empty, shift one week back
-        this_monday -= timedelta(days=7)
-    p2_from, p2_to = this_monday, today - timedelta(days=1)
-    p1_from = this_monday - timedelta(days=7)
-    p1_to = this_monday - timedelta(days=1)
-    return p1_from, p1_to, p2_from, p2_to
-
-
-def _calendar_months(today: date) -> tuple[date, date, date, date]:
-    """This month (1st..yesterday) vs previous full month.
-    On the 1st, compares the two previous full months instead."""
-    first_this = today.replace(day=1)
-    if first_this > today - timedelta(days=1):
-        # Today is the 1st — shift one month back
-        p2_to = first_this - timedelta(days=1)
-        p2_from = p2_to.replace(day=1)
-        p1_to = p2_from - timedelta(days=1)
-        p1_from = p1_to.replace(day=1)
-        return p1_from, p1_to, p2_from, p2_to
-    p2_from, p2_to = first_this, today - timedelta(days=1)
-    p1_to = first_this - timedelta(days=1)
-    p1_from = p1_to.replace(day=1)
-    return p1_from, p1_to, p2_from, p2_to
 
 
 async def _run_comparison(message: Message, state: FSMContext, account,
@@ -70,53 +41,6 @@ async def _run_comparison(message: Message, state: FSMContext, account,
             pass
 
 
-@router.callback_query(F.data.startswith("comp_"))
-async def comparison_period_callback(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    account_id = data.get("selected_account")
-    if not account_id:
-        await callback.answer("⚠️ Аккаунт не выбран.", show_alert=True)
-        return
-    account = await crud.get_account_by_id(account_id)
-    if not account:
-        await callback.answer("⚠️ Аккаунт не найден.", show_alert=True)
-        return
-
-    comp_type = callback.data.split("_")[1]
-    today = datetime.now(timezone.utc).date()
-
-    if comp_type == "week":
-        periods = _calendar_weeks(today)
-    elif comp_type == "month":
-        periods = _calendar_months(today)
-    elif comp_type == "custom":
-        await state.set_state(ComparisonForm.waiting_custom_dates)
-        await state.update_data(calendar_stage=1)
-        await callback.message.edit_text(
-            "Выберите начало первого периода:",
-            reply_markup=comparison_calendar_kb(today.year, today.month, 1, today),
-        )
-        await callback.answer()
-        return
-        await callback.message.edit_text(
-            "📅 Введите два периода в формате:\n"
-            "ДД.ММ-ДД.ММ vs ДД.ММ-ДД.ММ\n"
-            "Например: 01.09-07.09 vs 08.09-14.09",
-        )
-        await callback.answer()
-        return
-    else:
-        await callback.answer("⚠️ Неизвестный тип сравнения.", show_alert=True)
-        return
-
-    await callback.answer()
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await _run_comparison(callback.message, state, account, *periods)
-
-
 @router.callback_query(F.data.startswith("cmpcal_"))
 async def comparison_calendar_callback(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -125,7 +49,7 @@ async def comparison_calendar_callback(callback: CallbackQuery, state: FSMContex
         await callback.answer("Календарь устарел. Начните сравнение заново.", show_alert=True)
         return
     parts = callback.data.split("_")
-    today = datetime.now(timezone.utc).date()
+    today = app_today()
     if parts[1] == "noop":
         await callback.answer()
         return
@@ -189,7 +113,7 @@ async def custom_comparison_dates_handler(message: Message, state: FSMContext):
     # while an old/stale custom-date prompt is still visible.
     data = await state.get_data()
     stage = data.get("calendar_stage", 1)
-    today = datetime.now(timezone.utc).date()
+    today = app_today()
     selected_month = data.get("p1_from") or today
     await state.update_data(calendar_stage=stage)
     await message.answer(
@@ -198,29 +122,3 @@ async def custom_comparison_dates_handler(message: Message, state: FSMContext):
             selected_month.year, selected_month.month, stage, today
         ),
     )
-    return
-
-    data = await state.get_data()
-    account_id = data.get("selected_account")
-
-    account = await crud.get_account_by_id(account_id) if account_id else None
-    if not account:
-        await state.set_state(None)
-        await message.answer("⚠️ Аккаунт не выбран. Начните заново из меню.")
-        return
-
-    try:
-        p1_from, p1_to, p2_from, p2_to = parse_comparison_input(
-            message.text, datetime.now(timezone.utc).date()
-        )
-    except ValueError:
-        # State is NOT cleared — user can retry immediately
-        await message.answer(
-            "❌ Неверный формат. Попробуйте ещё раз:\n"
-            "ДД.ММ-ДД.ММ vs ДД.ММ-ДД.ММ\n"
-            "Например: 01.09-07.09 vs 08.09-14.09"
-        )
-        return
-
-    await state.set_state(None)
-    await _run_comparison(message, state, account, p1_from, p1_to, p2_from, p2_to)

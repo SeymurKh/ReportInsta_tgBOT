@@ -9,7 +9,7 @@ from aiogram.types import Message, CallbackQuery
 from database import crud
 from bot.keyboards import main_menu_kb, accounts_kb, comparison_calendar_kb, report_calendar_kb
 from bot.states import ReportForm, ComparisonForm
-from datetime import datetime, timezone
+from utils.timezones import app_today
 from bot.helpers import send_excel
 from utils.formatters import format_number
 
@@ -110,7 +110,7 @@ async def account_callback(callback: CallbackQuery, state: FSMContext):
     await state.update_data(selected_account=account_id)
 
     if flow == "comparison":
-        today = datetime.now(timezone.utc).date()
+        today = app_today()
         await state.set_state(ComparisonForm.waiting_custom_dates)
         await state.update_data(calendar_stage=1)
         await callback.message.edit_text(
@@ -118,7 +118,7 @@ async def account_callback(callback: CallbackQuery, state: FSMContext):
             reply_markup=comparison_calendar_kb(today.year, today.month, 1, today),
         )
     else:
-        today = datetime.now(timezone.utc).date()
+        today = app_today()
         await state.set_state(ReportForm.waiting_custom_dates)
         await state.update_data(report_calendar_stage=1)
         await callback.message.edit_text(

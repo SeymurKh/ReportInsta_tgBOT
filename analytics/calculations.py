@@ -1,5 +1,3 @@
-from datetime import date
-from typing import Optional
 import json
 
 
@@ -28,14 +26,6 @@ def _metrics_present(row) -> set[str] | None:
     if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
         return None
     return set(values)
-
-
-def calculate_growth(current: int, previous: int) -> tuple[int, Optional[float]]:
-    absolute = current - previous
-    if previous == 0:
-        return absolute, None
-    pct = ((current - previous) / previous) * 100
-    return absolute, round(pct, 1)
 
 
 def calculate_period_summary(stats_list: list) -> dict:
@@ -123,7 +113,17 @@ def calculate_content_summary(posts_list: list) -> dict:
     missing_insight_metrics = {name: 0 for name in {m for group in expected_metrics.values() for m in group}}
     partial_insights_posts = 0
     for post in known_posts:
-        present = set(json.loads(post.insights_present))
+        # Corrupted provenance metadata must never crash a report (same
+        # handling as stories in calculate_stories_summary).
+        try:
+            decoded = json.loads(post.insights_present)
+        except (TypeError, ValueError):
+            decoded = None
+        present = (
+            {value for value in decoded if isinstance(value, str)}
+            if isinstance(decoded, list)
+            else set()
+        )
         missing = expected_metrics.get(post.media_type, expected_metrics["IMAGE"]) - present
         if missing:
             partial_insights_posts += 1
@@ -172,12 +172,6 @@ def get_best_post(posts: list, content_type: str = None):
     if not filtered:
         return None
     return max(filtered, key=score_post)
-
-
-def get_worst_post(posts: list):
-    if not posts:
-        return None
-    return min(posts, key=score_post)
 
 
 _POST_METRICS = {
@@ -361,18 +355,3 @@ def get_best_story(stories_list: list):
     if not stories_list:
         return None
     return max(stories_list, key=lambda s: (s.views, s.reach))
-
-
-def compare_accounts(accounts_data: list) -> dict:
-    if not accounts_data:
-        return {}
-
-    best_growth = max(accounts_data, key=lambda a: a.get("growth_pct", 0))
-    best_er = max(accounts_data, key=lambda a: a.get("engagement_rate", 0))
-    best_reach = max(accounts_data, key=lambda a: a.get("reach_total", 0))
-
-    return {
-        "best_growth": {"account": best_growth["name"], "value": best_growth.get("growth_pct", 0)},
-        "best_engagement": {"account": best_er["name"], "value": best_er.get("engagement_rate", 0)},
-        "best_reach": {"account": best_reach["name"], "value": best_reach.get("reach_total", 0)},
-    }

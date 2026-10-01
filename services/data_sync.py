@@ -106,19 +106,31 @@ def make_insights_filter(posts_cached: list, now: datetime):
     return should_refresh
 
 
+def _skipped_sync_result(reason: str) -> dict:
+    """Uniform result shape — callers (report generator) read these keys
+    unconditionally, so a skipped sync must look like a partial sync."""
+    return {
+        "skipped": True,
+        "reason": reason,
+        "api_delay_dates": [],
+        "partial": True,
+        "partial_reasons": ["синхронизация уже выполняется"],
+    }
+
+
 async def sync_account_data(account, since_dt: datetime, until_dt: datetime) -> dict:
     """Synchronize one account and persist an observable sync status."""
     lock = _account_lock(account.id)
     if lock.locked():
         logger.warning("Skipping overlapping sync for @%s", account.username)
-        return {"skipped": True, "reason": "already_running", "partial": True}
+        return _skipped_sync_result("already_running")
     async with lock:
         owner = f"pid:{os.getpid()}:{uuid.uuid4().hex}"
         if not await crud.acquire_sync_lease(
             account.id, owner, ttl_seconds=settings.SYNC_LEASE_TTL_SECONDS
         ):
             logger.warning("Skipping cross-process overlapping sync for @%s", account.username)
-            return {"skipped": True, "reason": "lease_held", "partial": True}
+            return _skipped_sync_result("lease_held")
         heartbeat = asyncio.create_task(_renew_lease(account.id, owner))
         run_id: int | None = None
         try:

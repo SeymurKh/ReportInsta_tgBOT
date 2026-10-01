@@ -46,7 +46,9 @@ class Settings:
     INSTAGRAM_API_VERSION: str = os.getenv("INSTAGRAM_API_VERSION", "v25.0")
     INSTAGRAM_BASE_URL: str = "https://graph.instagram.com"
 
-    # Instagram Accounts (loaded from .env INSTAGRAM_ACCOUNTS as JSON)
+    # Instagram Accounts (loaded from .env INSTAGRAM_ACCOUNTS as JSON).
+    # Each entry: {"name", "user_id", "access_token"}; optional "username" —
+    # the real Instagram @username when it differs from the display name.
     ACCOUNTS: list[dict] = []
     ACCOUNTS_JSON_ERROR: str | None = None
     try:
@@ -121,6 +123,18 @@ class Settings:
                         errors.append(f"INSTAGRAM_ACCOUNTS[{i}] is missing '{key}'")
         if not self.OPENAI_API_KEY:
             warnings.append("OPENAI_API_KEY is not set — AI analysis and chat will be unavailable")
+        if not (0 <= self.DAILY_REPORT_HOUR <= 23):
+            errors.append("DAILY_REPORT_HOUR must be between 0 and 23")
+        for name, value in (
+            ("STORIES_POLL_INTERVAL_HOURS", self.STORIES_POLL_INTERVAL_HOURS),
+            ("DATA_SYNC_INTERVAL_HOURS", self.DATA_SYNC_INTERVAL_HOURS),
+        ):
+            if value <= 0:
+                errors.append(f"{name} must be greater than 0")
+        if self.DATA_SYNC_WINDOW_DAYS <= 0:
+            errors.append("DATA_SYNC_WINDOW_DAYS must be greater than 0")
+        if self.CACHE_FRESHNESS_HOURS <= 0:
+            errors.append("CACHE_FRESHNESS_HOURS must be greater than 0")
         try:
             ZoneInfo(self.APP_TIMEZONE)
         except ZoneInfoNotFoundError:

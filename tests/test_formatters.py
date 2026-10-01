@@ -5,7 +5,7 @@ import pytest
 
 from utils.formatters import (
     format_number, format_pct, format_date, format_period, format_growth,
-    truncate_text, format_context_for_ai,
+    format_context_for_ai,
 )
 from bot.helpers import parse_period_input, parse_comparison_input
 
@@ -31,11 +31,6 @@ def test_format_period():
 def test_format_growth():
     assert format_growth(640) == "📈 +640"
     assert format_growth(-120) == "📉 -120"
-
-
-def test_truncate_text():
-    assert truncate_text("abc", 10) == "abc"
-    assert len(truncate_text("a" * 5000)) == 4096
 
 
 def test_format_context_for_ai_report():

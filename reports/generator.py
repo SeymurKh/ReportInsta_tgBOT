@@ -16,6 +16,7 @@ from reports.charts import (
     create_stories_chart, create_comparison_chart,
 )
 from utils.formatters import format_number, format_pct, format_period, format_growth, MONTHS_RU
+from utils.timezones import app_today
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +47,8 @@ def resolve_period(
     custom_date_from: date | None = None,
     custom_date_to: date | None = None,
 ) -> tuple[date, date]:
-    """Resolve a report period using UTC calendar dates."""
-    today = utc_now_naive().date()
+    """Resolve a report period using APP_TIMEZONE calendar dates."""
+    today = app_today()
     if custom_date_from is not None or custom_date_to is not None:
         if custom_date_from is None or custom_date_to is None:
             raise ValueError("both custom period dates are required")
@@ -298,7 +299,9 @@ Reels: {content_summary['total_reels']} | Видео: {content_summary['total_vi
 🤖 AI-анализ
 {ai_analysis}"""
 
-    report_text += _warnings_block(fetch_info["api_delay_dates"], fetch_info["partial"])
+    report_text += _warnings_block(
+        fetch_info.get("api_delay_dates", []), fetch_info.get("partial", False)
+    )
     interaction_note = _interaction_reconciliation_note(content_summary)
     if interaction_note:
         report_text += "\n\n" + interaction_note
@@ -417,8 +420,10 @@ async def generate_comparison_periods_report(
 
     f1 = await _fetch_and_save_data(account, p1_since_dt, p1_until_dt)
     f2 = await _fetch_and_save_data(account, p2_since_dt, p2_until_dt)
-    api_delay_dates = sorted(set(f1["api_delay_dates"] + f2["api_delay_dates"]))
-    partial = f1["partial"] or f2["partial"]
+    api_delay_dates = sorted(set(
+        f1.get("api_delay_dates", []) + f2.get("api_delay_dates", [])
+    ))
+    partial = bool(f1.get("partial")) or bool(f2.get("partial"))
     await _refresh_stories_if_recent(account, max(p1_until_dt, p2_until_dt))
 
     p1_stats = await crud.get_daily_stats(account.id, period1_from, period1_to)

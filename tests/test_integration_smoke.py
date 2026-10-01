@@ -187,3 +187,51 @@ def test_comparison_report_handles_unknown_follower_growth():
     assert result["context"]["period1"]["stats"]["followers_growth"] is None
     assert "Прирост подписчиков: н/д (неполные данные)" in result["text"]
 
+
+def test_report_survives_skipped_sync_result_shape():
+    """Regression: when a sync is already running for the account,
+    sync_account_data returns a shortened skipped result — the report must
+    not crash on missing api_delay_dates and must warn instead."""
+    account = SimpleNamespace(id=1, username="demo", name="Demo")
+    skipped = {"skipped": True, "reason": "already_running", "partial": True}
+
+    async def run():
+        with patch("reports.generator._fetch_and_save_data", new=AsyncMock(return_value=skipped)), \
+             patch("reports.generator._refresh_stories_if_recent", new=AsyncMock()), \
+             patch("reports.generator.get_analyzer", return_value=None), \
+             patch("reports.generator.crud.get_daily_stats", new=AsyncMock(return_value=[])), \
+             patch("reports.generator.crud.get_latest_stats", new=AsyncMock(return_value=None)), \
+             patch("reports.generator.crud.get_posts", new=AsyncMock(return_value=[])), \
+             patch("reports.generator.crud.get_stories", new=AsyncMock(return_value=[])):
+            return await generate_report(
+                account, custom_date_from=date(2026, 9, 1), custom_date_to=date(2026, 9, 1)
+            )
+
+    result = asyncio.run(run())
+    assert result["text"]
+    assert "⚠️ Часть данных не удалось получить" in result["text"]
+
+
+def test_comparison_survives_skipped_sync_result_shape():
+    """Regression: same shortened skipped result on the comparison path."""
+    account = SimpleNamespace(id=1, username="demo", name="Demo")
+    skipped = {"skipped": True, "reason": "lease_held", "partial": True}
+    complete = {"api_delay_dates": [], "partial": False}
+
+    async def run():
+        with patch("reports.generator._fetch_and_save_data", new=AsyncMock(side_effect=[skipped, complete])), \
+             patch("reports.generator._refresh_stories_if_recent", new=AsyncMock()), \
+             patch("reports.generator.get_analyzer", return_value=None), \
+             patch("reports.generator.crud.get_daily_stats", new=AsyncMock(return_value=[])), \
+             patch("reports.generator.crud.get_posts", new=AsyncMock(return_value=[])), \
+             patch("reports.generator.crud.get_stories", new=AsyncMock(return_value=[])):
+            return await generate_comparison_periods_report(
+                account,
+                date(2026, 9, 1), date(2026, 9, 7),
+                date(2026, 9, 8), date(2026, 9, 14),
+            )
+
+    result = asyncio.run(run())
+    assert result["text"]
+    assert "⚠️ Часть данных не удалось получить" in result["text"]
+

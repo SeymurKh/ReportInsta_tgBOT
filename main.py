@@ -34,13 +34,15 @@ logger = logging.getLogger(__name__)
 async def seed_accounts() -> None:
     """Save configured Instagram accounts to DB."""
     for acc in settings.ACCOUNTS:
+        # Optional per-account "username" key; fall back to the display name.
+        username = acc.get("username") or acc["name"]
         await crud.save_or_update_account(
             instagram_user_id=acc["user_id"],
-            username=acc["name"],
+            username=username,
             name=acc["name"],
             access_token=acc["access_token"],
         )
-        logger.info(f"Account @{acc['name']} saved to DB")
+        logger.info(f"Account @{username} saved to DB")
 
 
 async def main() -> None:

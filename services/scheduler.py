@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -107,13 +108,26 @@ async def data_sync_loop() -> None:
 
 
 async def maintenance_loop(bot: Bot) -> None:
-    """Run local maintenance without blocking the event loop."""
-    interval = max(settings.BACKUP_INTERVAL_HOURS, 1) * 3600
-    logger.info("Maintenance started (backups every %sh)", settings.BACKUP_INTERVAL_HOURS)
+    """Run local maintenance without blocking the event loop.
+
+    Health checks run every hour so data-freshness problems surface quickly;
+    SQLite backups are throttled to BACKUP_INTERVAL_HOURS.
+    """
+    health_interval = 3600.0
+    backup_interval = max(settings.BACKUP_INTERVAL_HOURS, 1) * 3600
+    last_backup: float | None = None
+    logger.info(
+        "Maintenance started (health every 1h, backups every %sh)",
+        settings.BACKUP_INTERVAL_HOURS,
+    )
     while True:
         try:
-            if settings.BACKUP_ENABLED:
+            now_monotonic = time.monotonic()
+            if settings.BACKUP_ENABLED and (
+                last_backup is None or now_monotonic - last_backup >= backup_interval
+            ):
                 await asyncio.to_thread(create_configured_backup)
+                last_backup = now_monotonic
             if settings.ADMIN_TELEGRAM_ID:
                 issues = await collect_sync_health_issues()
                 if issues:
@@ -133,7 +147,7 @@ async def maintenance_loop(bot: Bot) -> None:
                             raise
         except Exception:
             logger.error("Maintenance round failed", exc_info=True)
-        await asyncio.sleep(interval)
+        await asyncio.sleep(health_interval)
 
 
 async def _sync_with_backoff(account, since_dt: datetime, until_dt: datetime) -> None:
@@ -180,8 +194,8 @@ def start_background_tasks(bot: Bot) -> list[asyncio.Task]:
         tasks.append(asyncio.create_task(daily_report_loop(bot)))
     if settings.DATA_SYNC_ENABLED:
         tasks.append(asyncio.create_task(data_sync_loop()))
-    if settings.BACKUP_ENABLED:
-        tasks.append(asyncio.create_task(maintenance_loop(bot)))
+    # Maintenance always runs: health checks must not depend on backup settings.
+    tasks.append(asyncio.create_task(maintenance_loop(bot)))
     return tasks
 
 

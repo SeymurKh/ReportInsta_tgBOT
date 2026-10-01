@@ -38,3 +38,6 @@ backups/
 
 # Charts temp files
 *.png
+
+# Release artifacts
+release_*.zip

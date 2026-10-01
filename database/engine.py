@@ -1,4 +1,5 @@
 import os
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from config import settings
 from database.models import Base
@@ -11,11 +12,56 @@ engine: AsyncEngine = create_async_engine(settings.DATABASE_URL, echo=False)
 
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
+SQLITE_PRAGMAS = (
+    "PRAGMA journal_mode=WAL",    # concurrent reads while background sync writes
+    "PRAGMA busy_timeout=5000",   # wait instead of raising 'database is locked'
+    "PRAGMA synchronous=NORMAL",  # safe with WAL
+)
+
+
+def configure_sqlite_engine(target_engine: AsyncEngine) -> None:
+    """Apply production-hardening PRAGMAs to every new SQLite connection."""
+
+    @event.listens_for(target_engine.sync_engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        for pragma in SQLITE_PRAGMAS:
+            cursor.execute(pragma)
+        cursor.close()
+
+
+if "sqlite" in settings.DATABASE_URL:
+    configure_sqlite_engine(engine)
+
 
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_apply_lightweight_migrations)
+        if conn.dialect.name == "sqlite":
+            await conn.run_sync(_normalize_sqlite_datetime_strings)
+
+
+def _normalize_sqlite_datetime_strings(sync_conn) -> None:
+    """Strip '+00:00' offsets from datetime strings written by older versions.
+
+    The project convention is naive UTC datetimes; aware values made columns
+    mix both storage formats. SQLite keeps datetimes as text, so this one-time
+    normalization at startup is safe and idempotent.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    for table in inspector.get_table_names():
+        for column in inspector.get_columns(table):
+            col_type = str(column.get("type", "")).upper()
+            if "DATETIME" not in col_type and "TIMESTAMP" not in col_type:
+                continue
+            name = column["name"]
+            sync_conn.execute(text(
+                f"UPDATE {table} SET {name} = substr({name}, 1, length({name}) - 6) "
+                f"WHERE {name} LIKE '%+00:00'"
+            ))
 
 
 def _apply_lightweight_migrations(sync_conn) -> None:

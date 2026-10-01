@@ -2,7 +2,7 @@
 from datetime import date, datetime
 
 from analytics.calculations import (
-    calculate_growth, calculate_period_summary, calculate_content_summary,
+    calculate_period_summary, calculate_content_summary,
     calculate_stories_summary, get_best_story, detect_trend, score_post,
     top_posts_by_metric, compare_content_formats, daily_peaks, data_quality_summary,
 )
@@ -54,16 +54,6 @@ class FakeStory:
         self.timestamp = datetime(2026, 9, 1, 12, 0)
 
 
-# ── calculate_growth ──
-
-def test_growth_normal():
-    assert calculate_growth(110, 100) == (10, 10.0)
-
-
-def test_growth_zero_previous():
-    assert calculate_growth(50, 0) == (50, None)
-
-
 def test_follower_trend_is_unknown_without_data():
     assert detect_trend([], "follower_count") == "unknown"
 
@@ -109,6 +99,20 @@ def test_content_summary_empty():
     c = calculate_content_summary([])
     assert c["total_posts"] == 0
     assert c["engagement_rate"] == 0.0
+
+
+def test_content_summary_survives_corrupted_insights_metadata():
+    """Regression: unguarded json.loads on insights_present crashed report
+    generation when provenance metadata was corrupted (mirrors the stories
+    fix from the previous audit)."""
+    broken = FakePost("IMAGE")
+    broken.insights_present = "{broken json"
+    not_a_list = FakePost("REELS")
+    not_a_list.insights_present = '"reach"'
+    c = calculate_content_summary([broken, not_a_list])
+    assert c["total_posts"] == 2
+    assert c["partial_insights_posts"] == 2
+    assert c["missing_insight_metrics"]["reach"] == 2
 
 
 def test_content_summary_counts_types():

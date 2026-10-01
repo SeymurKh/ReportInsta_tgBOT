@@ -28,35 +28,6 @@ def accounts_kb(accounts: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def period_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📅 День", callback_data="period_day")],
-            [InlineKeyboardButton(text="📅 Неделя", callback_data="period_week")],
-            [InlineKeyboardButton(text="📅 Месяц", callback_data="period_month")],
-            [InlineKeyboardButton(text="📅 Произвольный период", callback_data="period_custom")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back")],
-        ]
-    )
-
-
-def back_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="back")]]
-    )
-
-
-def comparison_period_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Эта неделя vs Прошлая", callback_data="comp_week")],
-            [InlineKeyboardButton(text="Этот месяц vs Прошлый", callback_data="comp_month")],
-            [InlineKeyboardButton(text="📅 Произвольные даты", callback_data="comp_custom")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back")],
-        ]
-    )
-
-
 def comparison_calendar_kb(year: int, month: int, stage: int, today: date) -> InlineKeyboardMarkup:
     """Calendar for selecting four comparison boundary dates sequentially."""
     buttons = [[
@@ -111,17 +82,6 @@ def report_calendar_kb(year: int, month: int, stage: int, today: date) -> Inline
         InlineKeyboardButton(text="›", callback_data=f"repcal_nav_{stage}_{year}_{month}_1"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def ai_period_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📅 Неделя", callback_data="ai_period_week")],
-            [InlineKeyboardButton(text="📅 Месяц", callback_data="ai_period_month")],
-            [InlineKeyboardButton(text="📅 Произвольный", callback_data="ai_period_custom")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back")],
-        ]
-    )
 
 
 def ai_calendar_kb(year: int, month: int, stage: int, today: date) -> InlineKeyboardMarkup:

@@ -32,7 +32,7 @@ async def save_or_update_account(
             account.name = name
             account.access_token = access_token
             account.is_active = True
-            account.updated_at = datetime.now(timezone.utc)
+            account.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         else:
             account = Account(
                 instagram_user_id=instagram_user_id,
@@ -54,14 +54,6 @@ async def get_all_accounts() -> list[Account]:
         return list(result.scalars().all())
 
 
-async def get_account_by_username(username: str) -> Optional[Account]:
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(Account).where(Account.username == username, Account.is_active.is_(True))
-        )
-        return result.scalar_one_or_none()
-
-
 async def get_account_by_id(account_id: int) -> Optional[Account]:
     async with async_session_factory() as session:
         result = await session.execute(select(Account).where(Account.id == account_id))
@@ -73,7 +65,7 @@ async def update_account_token(instagram_user_id: str, new_token: str) -> None:
         await session.execute(
             update(Account)
             .where(Account.instagram_user_id == instagram_user_id)
-            .values(access_token=new_token, updated_at=datetime.now(timezone.utc))
+            .values(access_token=new_token, updated_at=datetime.now(timezone.utc).replace(tzinfo=None))
         )
         await session.commit()
 
@@ -311,6 +303,22 @@ async def release_notification_delivery(delivery_key: str) -> None:
 # ────────────────────── Daily Stats ──────────────────────
 
 
+def _merge_metrics_present(existing_raw: str | None, new_metrics) -> str | None:
+    """Cumulative provenance: a partial re-fetch must not erase metric names
+    seen in earlier refreshes (same policy as update_story_insights)."""
+    if new_metrics is None:
+        return existing_raw
+    merged = {m for m in new_metrics if isinstance(m, str)}
+    if existing_raw:
+        try:
+            decoded = json.loads(existing_raw)
+        except (TypeError, ValueError):
+            decoded = None
+        if isinstance(decoded, list):
+            merged |= {v for v in decoded if isinstance(v, str)}
+    return json.dumps(sorted(merged))
+
+
 async def save_daily_stats(
     account_id: int,
     stats_date: date,
@@ -348,7 +356,7 @@ async def save_daily_stats(
                 if value is not None:
                     setattr(row, field, value)
             if metrics_present is not None:
-                row.metrics_present = json.dumps(sorted(set(metrics_present)))
+                row.metrics_present = _merge_metrics_present(row.metrics_present, metrics_present)
         else:
             session.add(DailyStats(
                 account_id=account_id, date=stats_date,
@@ -596,30 +604,6 @@ async def get_post_by_media_id(media_id: str) -> Optional[Post]:
             select(Post).where(Post.instagram_media_id == media_id)
         )
         return result.scalar_one_or_none()
-
-
-async def get_top_posts(
-    account_id: int,
-    date_from: datetime,
-    date_to: datetime,
-    metric: str = "total_interactions",
-    limit: int = 5,
-) -> list[Post]:
-    async with async_session_factory() as session:
-        order_col = getattr(Post, metric, Post.total_interactions)
-        result = await session.execute(
-            select(Post)
-            .where(
-                and_(
-                    Post.account_id == account_id,
-                    Post.timestamp >= date_from,
-                    Post.timestamp <= date_to,
-                )
-            )
-            .order_by(order_col.desc())
-            .limit(limit)
-        )
-        return list(result.scalars().all())
 
 
 # ────────────────────── Stories ──────────────────────
