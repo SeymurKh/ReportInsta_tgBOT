@@ -13,9 +13,9 @@ cannot break the alignment.
 
 FENCE = "```"
 
-TABLE_WIDTH = 40
+DIVIDER_WIDTH = 26
 LABEL_WIDTH = 25
-VALUE_WIDTH = TABLE_WIDTH - LABEL_WIDTH
+VALUE_WIDTH = 15
 
 CMP_LABEL_WIDTH = 24
 CMP_VALUE_WIDTH = 8
@@ -93,13 +93,18 @@ NOTE_POST_GAP = (
 
 
 def kv_row(label: str, value: str) -> str:
-    """One aligned label/value row of a metric table."""
-    return f"{label:<{LABEL_WIDTH}}{value:>{VALUE_WIDTH}}"
+    """One metric as a mobile-safe stacked row: label line + indented value.
+
+    Fixed-width columns only look aligned on wide screens; on phones every
+    long line wraps and the table turns into mush. Stacked rows wrap
+    gracefully on any screen width.
+    """
+    return f"{label}\n  {value}"
 
 
 def table_section(title: str, rows: list[tuple[str, str]]) -> str:
-    """A titled metric table (title + divider + aligned rows)."""
-    lines = [title, "─" * TABLE_WIDTH]
+    """A titled metric block (title + divider + stacked rows)."""
+    lines = [title, "─" * DIVIDER_WIDTH]
     lines.extend(kv_row(label, value) for label, value in rows)
     return "\n".join(lines)
 
@@ -110,8 +115,5 @@ def mono_block(sections: list[str]) -> str:
 
 
 def cmp_row(label: str, p1: str, p2: str, delta: str) -> str:
-    """One row of the period-comparison table."""
-    return (
-        f"{label:<{CMP_LABEL_WIDTH}}{p1:>{CMP_VALUE_WIDTH}}"
-        f"{p2:>{CMP_VALUE_WIDTH}}{delta:>{CMP_DELTA_WIDTH}}"
-    )
+    """One comparison metric as a mobile-safe stacked row."""
+    return f"{label}\n  П1  {p1} → П2  {p2}\n  Δ  {delta}"

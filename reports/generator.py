@@ -21,7 +21,7 @@ from reports.naming import (
     L_STORIES_SHARES, L_STORIES_VIEWS, L_TREND, L_VIEWS, L_VIEWS_DAILY,
     NOTE_ACCOUNT_GAP, NOTE_GROWTH, NOTE_POST_GAP, NOTE_TERMS,
     SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_PLAIN,
-    cmp_row, mono_block, table_section,
+    DIVIDER_WIDTH, cmp_row, mono_block, table_section,
 )
 from reports.charts import (
     create_followers_chart, create_metrics_chart,
@@ -564,11 +564,11 @@ async def generate_comparison_periods_report(
         return d, pct
 
     def daily_average(summary, available_days, field):
-        """Normalize a period total by calendar days, preserving missing data."""
+        """Exact per-day average of a period total (display rounds it later)."""
         total = summary[field]
         if total is None:
             return None
-        return round(total / available_days) if available_days else 0
+        return total / available_days if available_days else 0
 
     p1_available = len(p1_stats)
     p2_available = len(p2_stats)
@@ -579,39 +579,38 @@ async def generate_comparison_periods_report(
     p1_engaged_daily = daily_average(s1, p1_available, "accounts_engaged_total")
     p2_engaged_daily = daily_average(s2, p2_available, "accounts_engaged_total")
 
-    def cmp_line(label, v1, v2):
+    def cmp_line(label, v1, v2, decimals=0):
         d, pct = diff(v1, v2)
         if d is None:
             return cmp_row(label, "н/д", "н/д", "н/д")
-        fmt = (lambda v: f"{v:.1f}") if isinstance(v1, float) else (lambda v: format_number(v))
+        fmt = (lambda v: f"{v:.{decimals}f}") if decimals else (lambda v: format_number(v))
         sign = "+" if d >= 0 else ""
         pct_str = f" ({sign}{pct:.1f}%)" if pct is not None else ""
         return cmp_row(label, fmt(v1), fmt(v2), f"{sign}{fmt(d)}{pct_str}")
 
-    header = cmp_row("Показатель", "П1", "П2", "Δ")
-    divider = "─" * 52
+    divider = "─" * DIVIDER_WIDTH
     cmp_tables = [
         "\n".join([
-            SEC_ACTIVITY, divider, header,
+            SEC_ACTIVITY, divider,
             cmp_line(L_FOLLOWERS_GROWTH, s1["followers_growth"], s2["followers_growth"]),
             cmp_line(L_REACH, s1["reach_total"], s2["reach_total"]),
-            cmp_line(L_REACH_DAILY, p1_reach_daily, p2_reach_daily),
+            cmp_line(L_REACH_DAILY, p1_reach_daily, p2_reach_daily, decimals=1),
             cmp_line(L_VIEWS, s1["views_total"], s2["views_total"]),
-            cmp_line(L_VIEWS_DAILY, p1_views_daily, p2_views_daily),
+            cmp_line(L_VIEWS_DAILY, p1_views_daily, p2_views_daily, decimals=1),
             cmp_line(L_ENGAGED, s1["accounts_engaged_total"], s2["accounts_engaged_total"]),
-            cmp_line(L_ENGAGED_DAILY, p1_engaged_daily, p2_engaged_daily),
+            cmp_line(L_ENGAGED_DAILY, p1_engaged_daily, p2_engaged_daily, decimals=1),
         ]),
         "\n".join([
-            SEC_CONTENT, divider, header,
+            SEC_CONTENT, divider,
             cmp_line(L_POSTS, c1["total_posts"], c2["total_posts"]),
             cmp_line(L_POST_LIKES_TOTAL, c1["total_likes"], c2["total_likes"]),
             cmp_line(L_POST_COMMENTS_TOTAL, c1["total_comments"], c2["total_comments"]),
             cmp_line(L_POST_SAVES_TOTAL, c1["total_saves"], c2["total_saves"]),
             cmp_line(L_POST_SHARES_TOTAL, c1["total_shares"], c2["total_shares"]),
-            cmp_line(L_POST_ER, c1["engagement_rate"], c2["engagement_rate"]),
+            cmp_line(L_POST_ER, c1["engagement_rate"], c2["engagement_rate"], decimals=1),
         ]),
         "\n".join([
-            SEC_STORIES, divider, header,
+            SEC_STORIES, divider,
             cmp_line(L_STORIES_COUNT, st1["total_stories"], st2["total_stories"]),
             cmp_line(L_STORIES_VIEWS, st1["total_views"], st2["total_views"]),
             cmp_line(L_STORIES_REPLIES, st1["total_replies"], st2["total_replies"]),
