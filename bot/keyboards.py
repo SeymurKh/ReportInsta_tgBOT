@@ -9,7 +9,7 @@ from datetime import date
 def main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📊 Отчёты"), KeyboardButton(text="📊 Сравнение")],
+            [KeyboardButton(text="📊 Отчёты", style="primary"), KeyboardButton(text="📊 Сравнение", style="primary")],
             [KeyboardButton(text="📱 Аккаунты")],
         ],
         resize_keyboard=True,
@@ -87,8 +87,8 @@ def report_calendar_kb(year: int, month: int, stage: int, today: date) -> Inline
 def question_after_report_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📄 Скачать Excel", callback_data="download_excel")],
-            [InlineKeyboardButton(text="💬 Вопрос по отчёту", callback_data="question_about_report")],
+            [InlineKeyboardButton(text="📄 Скачать Excel", callback_data="download_excel", style="success")],
+            [InlineKeyboardButton(text="💬 Вопрос по отчёту", callback_data="question_about_report", style="primary")],
         ]
     )
 
@@ -96,7 +96,7 @@ def question_after_report_kb() -> InlineKeyboardMarkup:
 def dialogue_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📄 Скачать Excel"), KeyboardButton(text="◀️ В меню")],
+            [KeyboardButton(text="📄 Скачать Excel", style="success"), KeyboardButton(text="◀️ В меню", style="danger")],
         ],
         resize_keyboard=True,
     )
