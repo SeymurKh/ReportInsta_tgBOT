@@ -31,7 +31,7 @@ SEC_COMPARISON = "📊 СРАВНЕНИЕ ПЕРИОДОВ"
 # ── Followers ──
 L_FOLLOWERS_NOW = "Сейчас"
 L_FOLLOWERS_GROWTH = "Прирост за период"
-L_TREND = "Тренд (7 дн. к 7 дн.)"
+L_GROWTH_SPEED = "Скорость роста (7 дн. к 7 дн.)"
 
 # ── Account activity (Instagram API period totals) ──
 L_REACH = "Охват (уникальные)"
@@ -73,6 +73,12 @@ TREND_PLAIN = {
     "growing": "Растущий",
     "declining": "Снижающийся",
     "stable": "Стабильный",
+    "unknown": "н/д",
+}
+TREND_ADVERB = {
+    "growing": "растёт",
+    "declining": "снижается",
+    "stable": "стабильно",
     "unknown": "н/д",
 }
 

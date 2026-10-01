@@ -36,6 +36,13 @@ def split_message_text(text: str, max_len: int = MAX_MESSAGE_LEN) -> list[str]:
             current = parts[-1]
     if current:
         chunks.append(current)
+    # Keep calendar headers with their posts: move a trailing "📅 ..." line to
+    # the next message instead of leaving it orphaned at the end of a chunk.
+    for index in range(len(chunks) - 1):
+        head, separator, tail = chunks[index].rpartition("\n")
+        if tail.startswith("📅 "):
+            chunks[index] = head
+            chunks[index + 1] = tail + "\n" + chunks[index + 1]
     return chunks
 
 

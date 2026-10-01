@@ -18,10 +18,10 @@ from reports.naming import (
     L_POST_SHARES_TOTAL, L_POSTS, L_PROFILE_VIEWS, L_REACH, L_REACH_DAILY,
     L_STORIES_BACK, L_STORIES_COUNT, L_STORIES_EXIT, L_STORIES_FOLLOWS,
     L_STORIES_FORWARD, L_STORIES_PROFILE, L_STORIES_REACH, L_STORIES_REPLIES,
-    L_STORIES_SHARES, L_STORIES_VIEWS, L_TREND, L_VIEWS, L_VIEWS_DAILY,
+    L_STORIES_SHARES, L_STORIES_VIEWS, L_GROWTH_SPEED, L_VIEWS, L_VIEWS_DAILY,
     NOTE_ACCOUNT_GAP, NOTE_POST_GAP, GAP_EXTRA, GAP_RECOUNT, LEGEND_ITEMS,
     LEGEND_TITLE,
-    SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_PLAIN,
+    SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_ADVERB,
     DIVIDER_WIDTH, cmp_row, mono_block, table_section,
 )
 from reports.charts import (
@@ -274,10 +274,25 @@ async def generate_report(
     trend = detect_trend(stats_list, "follower_count")
     period_str = format_period(date_from, date_to)
 
+    # Growth speed: average daily follower gain of the last 7 days vs the
+    # 7 days before — the trend is about "now", not about the whole period.
+    values = [getattr(s, "follower_count", 0) or 0 for s in stats_list]
+    growth_speed_val = "н/д"
+    if trend != "unknown" and len(values) >= 2:
+        speed_window = min(7, max(1, len(values) // 2))
+        baseline = values[-2 * speed_window:-speed_window] or values[:1]
+        recent = values[-speed_window:]
+        baseline_avg = sum(baseline) / len(baseline)
+        recent_avg = sum(recent) / len(recent)
+        growth_speed_val = (
+            f"≈{recent_avg:.0f}/день (было ≈{baseline_avg:.0f}) — "
+            f"{TREND_ADVERB.get(trend, trend)}"
+        )
+
     analyzer = get_analyzer()
     if analyzer:
         ai_analysis = await analyzer.analyze_account(
-            period_str, stats_summary, content_summary, best_info, trend,
+            period_str, stats_summary, content_summary, best_info, growth_speed_val,
             stories_summary=stories_summary,
             data_quality=data_quality,
         )
@@ -335,7 +350,7 @@ async def generate_report(
         table_section(SEC_FOLLOWERS, [
             (L_FOLLOWERS_NOW, format_number(current_followers) if current_followers is not None else "н/д"),
             (L_FOLLOWERS_GROWTH, growth_val),
-            (L_TREND, TREND_PLAIN.get(trend, trend)),
+            (L_GROWTH_SPEED, growth_speed_val),
         ]),
         table_section(SEC_ACTIVITY, [
             (L_REACH, reach_str),
