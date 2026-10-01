@@ -76,20 +76,23 @@ TREND_PLAIN = {
     "unknown": "н/д",
 }
 
-# ── Footnotes ──
-NOTE_TERMS = "ℹ️ Охват — уникальные аккаунты; просмотры — все показы, включая повторы."
-NOTE_GROWTH = "ℹ️ % прироста — от базы на начало периода; прирост — по дневным данным."
+# ── Footnotes: compact legend + self-explanatory reconciliations ──
+LEGEND_TITLE = "📌 КАК ЧИТАТЬ"
+LEGEND_ITEMS = [
+    "• Охват и вовлечённые — уникальные аккаунты; просмотры — все показы, с повторами",
+    "• Прирост % — от базы на начало периода; прирост — по дневным данным",
+    "• ❤/💬/💾/📤 — метрики аккаунта; у публикаций — свои суммы",
+]
 NOTE_ACCOUNT_GAP = (
-    "ℹ️ Сверка взаимодействий аккаунта: сумма ❤/💬/💾/📤 ({components}) меньше "
-    "общего счётчика ({total}) — Instagram включает сюда и другие действия "
-    "(ответы и пр.); разница {gap}."
+    "ℹ️ Сверка взаимодействий аккаунта: {components} (❤💬💾📤) {sign}{gap} "
+    "({explanation}) = {total} — сходится."
 )
 NOTE_POST_GAP = (
-    "⚠️ Сверка взаимодействий публикаций{label}: сумма лайков, комментариев, "
-    "сохранений и репостов ({components}) не совпадает с total_interactions "
-    "Insights ({total}; разница {signed}). Метрики показаны по источникам "
-    "отдельно; ER рассчитан по total_interactions."
+    "ℹ️ Сверка взаимодействий публикаций{label}: {components} (❤💬💾📤) {sign}{gap} "
+    "({explanation}) = {total} — сходится. ER рассчитан по total_interactions."
 )
+GAP_EXTRA = "другие действия Instagram"
+GAP_RECOUNT = "пересчёт Instagram"
 
 
 def kv_row(label: str, value: str) -> str:

@@ -19,7 +19,8 @@ from reports.naming import (
     L_STORIES_BACK, L_STORIES_COUNT, L_STORIES_EXIT, L_STORIES_FOLLOWS,
     L_STORIES_FORWARD, L_STORIES_PROFILE, L_STORIES_REACH, L_STORIES_REPLIES,
     L_STORIES_SHARES, L_STORIES_VIEWS, L_TREND, L_VIEWS, L_VIEWS_DAILY,
-    NOTE_ACCOUNT_GAP, NOTE_GROWTH, NOTE_POST_GAP, NOTE_TERMS,
+    NOTE_ACCOUNT_GAP, NOTE_POST_GAP, GAP_EXTRA, GAP_RECOUNT, LEGEND_ITEMS,
+    LEGEND_TITLE,
     SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_PLAIN,
     DIVIDER_WIDTH, cmp_row, mono_block, table_section,
 )
@@ -134,18 +135,19 @@ def _interaction_reconciliation_note(content_summary: dict, period: str = "") ->
     if not gap:
         return ""
     label = f" за {period}" if period else ""
-    difference = format_number(abs(gap))
-    signed_difference = f"+{difference}" if gap > 0 else f"-{difference}"
+    sign = "+" if gap > 0 else "−"
     return NOTE_POST_GAP.format(
         label=label,
         components=format_number(content_summary.get("component_interactions", 0) or 0),
         total=format_number(content_summary.get("total_interactions", 0) or 0),
-        signed=signed_difference,
+        sign=sign,
+        gap=format_number(abs(gap)),
+        explanation=GAP_EXTRA if gap > 0 else GAP_RECOUNT,
     )
 
 
 def _account_interaction_note(stats_summary: dict) -> str:
-    """Explain why account interactions exceed the visible ❤/💬/💾/📤 sum."""
+    """Identity-style note: extended Instagram counter = 4 visible + the rest."""
     total = stats_summary.get("total_interactions_total")
     likes = stats_summary.get("likes_total")
     comments = stats_summary.get("comments_total")
@@ -154,12 +156,16 @@ def _account_interaction_note(stats_summary: dict) -> str:
     if total is None or None in (likes, comments, saves, shares):
         return ""
     components = likes + comments + saves + shares
-    if total <= components:
+    gap = total - components
+    if gap == 0:
         return ""
+    sign = "+" if gap > 0 else "−"
     return NOTE_ACCOUNT_GAP.format(
         components=format_number(components),
         total=format_number(total),
-        gap=f"+{format_number(total - components)}",
+        sign=sign,
+        gap=format_number(abs(gap)),
+        explanation=GAP_EXTRA if gap > 0 else GAP_RECOUNT,
     )
 
 # ────────────────────── Stories helpers ──────────────────────
@@ -188,9 +194,8 @@ def _stories_footer_text(stories_summary: dict, stories_list: list) -> str:
     """Best-story line (or the empty-period explanation)."""
     if not stories_summary.get("total_stories"):
         return (
-            "За период сторис не найдены. Если сторис были — сбор данных "
-            "начался недавно: историю сторис Instagram API не отдаёт, "
-            "бот собирает их каждые несколько часов с момента запуска."
+            "Сторис в периоде нет (история сторис Instagram недоступна — "
+            "бот собирает их с момента запуска)."
         )
     best = get_best_story(stories_list)
     if not best or best.views <= 0:
@@ -373,12 +378,13 @@ async def generate_report(
         formats_line += f" · 🎥 Видео {content_summary['total_videos']}"
 
     notes = [
-        f"из них: ❤ {likes_str} · 💬 {comments_str} · 💾 {saves_str} · 📤 {shares_str}",
+        f"из них по метрикам аккаунта: ❤ {likes_str} · 💬 {comments_str} · 💾 {saves_str} · 📤 {shares_str}",
         f"Форматы публикаций: {formats_line}",
-        NOTE_TERMS,
-        NOTE_GROWTH,
-        _account_interaction_note(stats_summary),
         stories_footer,
+        _account_interaction_note(stats_summary),
+        _interaction_reconciliation_note(content_summary),
+        LEGEND_TITLE,
+        *LEGEND_ITEMS,
     ]
 
     report_text = "\n\n".join(part for part in [
@@ -393,9 +399,6 @@ async def generate_report(
     report_text += _warnings_block(
         fetch_info.get("api_delay_dates", []), fetch_info.get("partial", False)
     )
-    interaction_note = _interaction_reconciliation_note(content_summary)
-    if interaction_note:
-        report_text += "\n\n" + interaction_note
     metric_gaps = [
         f"{metric}: {missing} дн. без метрики"
         for metric, missing in data_quality["metric_missing_days"].items()

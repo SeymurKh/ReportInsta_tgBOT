@@ -239,7 +239,7 @@ def _report_check_block(generated, account, independent, posts, stories):
     text = generated["text"]
     expected_note = _interaction_reconciliation_note(actual_content)
     checks["report_text_interaction_reconciliation"] = (
-        expected_note in text if expected_note else "⚠️ Сверка взаимодействий" not in text
+        expected_note in text if expected_note else "Сверка взаимодействий публикаций" not in text
     )
     def value_str(value):
         return format_number(value) if value else "н/д"
@@ -312,7 +312,7 @@ def _report_check_block(generated, account, independent, posts, stories):
         )
         checks["report_text_stories"] = all(marker in text for marker in story_markers)
     else:
-        checks["report_text_stories"] = "За период сторис не найдены." in text
+        checks["report_text_stories"] = "Сторис в периоде нет" in text
     return checks
 
 
