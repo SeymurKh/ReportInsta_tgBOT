@@ -95,6 +95,18 @@ def _set_numeric_format(ws, columns, min_row, max_row, fmt="#,##0"):
             ws.cell(row=row, column=column).number_format = fmt
 
 
+PERCENT_FORMAT = "0.0%"
+
+
+def _pct(value):
+    """Convert a percent-scale number (12.4) to an Excel percent fraction (0.124).
+
+    Native percent format renders identically in desktop and mobile Excel,
+    unlike the custom literal format 0.0"%" which mobile apps multiply by 100.
+    """
+    return value / 100 if isinstance(value, (int, float)) else value
+
+
 def generate_excel_report(
     account_username, account_name, period_str,
     stats_summary, content_summary, daily_stats,
@@ -128,13 +140,13 @@ def generate_excel_report(
         ("A7", "B7", "Охват", stats_summary.get("reach_total", "—")),
         ("C7", "D7", "Просмотры", stats_summary.get("views_total", "—")),
         ("A9", "B9", "Публикации", content_summary.get("total_posts", 0)),
-        ("C9", "D9", "ER", content_summary.get("engagement_rate", 0)),
+        ("C9", "D9", "ER", _pct(content_summary.get("engagement_rate", 0))),
     ]
     for label_ref, value_ref, label, value in cards:
         _card(ws, ws[label_ref], ws[value_ref], label, value)
     for row in (5, 7, 9):
         ws.row_dimensions[row].height = 24
-    ws["D9"].number_format = '0.0"%"'
+    ws["D9"].number_format = PERCENT_FORMAT
 
     row = 12
     sections = [
@@ -177,10 +189,10 @@ def generate_excel_report(
         for label, value in items:
             row += 1
             ws.cell(row=row, column=1, value=label)
-            ws.cell(row=row, column=2, value=value)
+            ws.cell(row=row, column=2, value=_pct(value) if "%" in label else value)
             _style_body(ws, row, row, 1, 2)
             if "%" in label:
-                ws.cell(row=row, column=2).number_format = '0.0"%"'
+                ws.cell(row=row, column=2).number_format = PERCENT_FORMAT
             elif isinstance(value, (int, float)):
                 ws.cell(row=row, column=2).number_format = "#,##0.0" if isinstance(value, float) else "#,##0"
         row += 2
@@ -257,9 +269,9 @@ def generate_excel_report(
         story_metrics = [("Количество сторис", "total_stories"), ("Просмотры (суммарно, с повторами)", "total_views"), ("Средние просмотры на сторис", "avg_views"), ("Охват (сумма по сторис)", "total_reach"), ("Средний охват на сторис", "avg_reach"), ("Ответы", "total_replies"), ("Репосты", "total_shares"), ("Переходы в профиль", "total_profile_activity"), ("Подписки со сторис", "total_follows"), ("Доля выходов, %", "exit_rate"), ("Пролистнули вперёд", "tap_forward_total"), ("Вернулись назад", "tap_back_total")]
         for i, (label, key) in enumerate(story_metrics, 5):
             ws_s.cell(row=i, column=1, value=label)
-            ws_s.cell(row=i, column=2, value=stories_summary.get(key, 0))
+            ws_s.cell(row=i, column=2, value=_pct(stories_summary.get(key, 0)) if " %" in label else stories_summary.get(key, 0))
             _style_body(ws_s, i, i, 1, 2)
-            ws_s.cell(row=i, column=2).number_format = '0.0"%"' if " %" in label else "#,##0"
+            ws_s.cell(row=i, column=2).number_format = PERCENT_FORMAT if " %" in label else "#,##0"
         header_row = 19
         headers_s = ["Дата", "Тип", "Просмотры", "Охват", "Ответы", "Репосты", "Профиль", "Подписки", "Вперёд", "Назад", "Выходы", "Свайпы"]
         for col, header in enumerate(headers_s, 1):
@@ -318,12 +330,13 @@ def generate_excel_report(
             d1, d2 = p1.get(key, {}), p2.get(key, {})
             for label, metric in metrics:
                 ws_cmp.cell(row=row, column=1, value=label)
-                ws_cmp.cell(row=row, column=2, value=d1.get(metric, 0))
-                ws_cmp.cell(row=row, column=3, value=d2.get(metric, 0))
+                is_pct = metric == "engagement_rate"
+                ws_cmp.cell(row=row, column=2, value=_pct(d1.get(metric, 0)) if is_pct else d1.get(metric, 0))
+                ws_cmp.cell(row=row, column=3, value=_pct(d2.get(metric, 0)) if is_pct else d2.get(metric, 0))
                 _style_body(ws_cmp, row, row, 1, 3)
-                if metric == "engagement_rate":
-                    ws_cmp.cell(row=row, column=2).number_format = '0.0"%"'
-                    ws_cmp.cell(row=row, column=3).number_format = '0.0"%"'
+                if is_pct:
+                    ws_cmp.cell(row=row, column=2).number_format = PERCENT_FORMAT
+                    ws_cmp.cell(row=row, column=3).number_format = PERCENT_FORMAT
                 row += 1
         if comparison_period_days:
             ws_cmp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)

@@ -85,6 +85,60 @@ def test_excel_comparison_contains_daily_and_format_sections():
     assert "Лучшие публикации" in values
 
 
+def test_excel_percent_cells_use_native_percent_format():
+    """Regression: mobile Excel multiplies the custom literal format 0.0"%"
+    by 100 — percent cells must use the native 0.0% format with fractions."""
+    context = {
+        "account": "@demo — Demo",
+        "account_username": "demo",
+        "period": "1–7 сентября",
+        "stats": {"followers_growth_pct": 12.4},
+        "content": {"engagement_rate": 8.9},
+        "stories": {"exit_rate": 15.0},
+        "stories_list": [],
+        "daily_stats": [],
+        "publications": [],
+        "ai_analysis": "Короткий анализ",
+    }
+    workbook = load_workbook(BytesIO(build_excel_from_context(context, [])[0]))
+
+    summary = workbook["Сводка"]
+    assert summary["D9"].number_format == "0.0%"
+    assert abs(summary["D9"].value - 0.089) < 1e-9
+
+    percent_cells = [
+        cell
+        for sheet in workbook.worksheets
+        for row in sheet.iter_rows()
+        for cell in row
+        if "%" in cell.number_format
+    ]
+    assert len(percent_cells) >= 4
+    for cell in percent_cells:
+        assert cell.number_format == "0.0%"
+        assert cell.value is None or 0 <= cell.value <= 1
+
+    comparison_context = {
+        "account": "@demo — Demo",
+        "account_username": "demo",
+        "period": "comparison",
+        "period1": {"name": "P1", "stats": {}, "content": {"engagement_rate": 8.9}, "stories": {}},
+        "period2": {"name": "P2", "stats": {}, "content": {"engagement_rate": 4.2}, "stories": {}},
+    }
+    comparison = load_workbook(BytesIO(build_excel_from_context(comparison_context, [])[0]))
+    cmp_cells = [
+        cell
+        for row in comparison["Сравнение"].iter_rows()
+        for cell in row
+        if "%" in cell.number_format
+    ]
+    assert len(cmp_cells) == 2
+    assert abs(cmp_cells[0].value - 0.089) < 1e-9
+    assert abs(cmp_cells[1].value - 0.042) < 1e-9
+    for cell in cmp_cells:
+        assert cell.number_format == "0.0%"
+
+
 def test_send_long_text_never_sends_empty_chunks():
     class FakeMessage:
         def __init__(self):
