@@ -1,7 +1,9 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
@@ -28,7 +30,62 @@ STORY_NAVIGATION_BREAKDOWN = "story_navigation_action_type"
 ACCOUNT_METRICS_OLD = ["reach", "follower_count"]
 ACCOUNT_METRICS_NEW = ["views", "accounts_engaged"]
 
+# Account-level metrics available as metric_type=total_value (API v25.0).
+# One request returns all of them for any window (a day bucket or a period).
+ACCOUNT_DAY_TOTAL_METRICS = [
+    "views", "accounts_engaged", "likes", "comments", "saves", "shares",
+    "replies", "total_interactions", "profile_views", "website_clicks",
+]
+# Fallback subset if a metric is unavailable for some account type.
+ACCOUNT_DAY_TOTAL_METRICS_CORE = [
+    "views", "accounts_engaged", "likes", "comments", "saves", "shares",
+    "total_interactions",
+]
+# Period totals — includes unique metrics (reach, accounts_engaged) that must
+# never be computed by summing days.
+ACCOUNT_PERIOD_TOTAL_METRICS = [
+    "reach", "accounts_engaged", "views", "likes", "comments", "saves",
+    "shares", "total_interactions", "profile_views",
+]
+
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=60)
+
+
+@dataclass
+class DayBucket:
+    """One Instagram insight day.
+
+    Instagram defines days as US Pacific calendar days: values[] end_time
+    points at the bucket END (07:00 UTC in summer, 08:00 UTC in winter), so
+    the app and our reports can share identical day labels.
+    """
+    start: datetime  # naive UTC
+    end: datetime    # naive UTC
+    label: date      # calendar date of the day in DAY_BUCKET_TIMEZONE
+
+    @property
+    def day_key(self) -> str:
+        return self.label.isoformat()
+
+
+def bucket_label(start: datetime) -> date:
+    """Calendar date of a bucket start in the reporting timezone."""
+    tz = ZoneInfo(settings.DAY_BUCKET_TIMEZONE)
+    return start.replace(tzinfo=timezone.utc).astimezone(tz).date()
+
+
+def _to_unix(dt: datetime) -> int:
+    return int(dt.replace(tzinfo=timezone.utc).timestamp())
+
+
+def _parse_total_value_items(data: dict) -> dict:
+    result = {}
+    for item in data.get("data", []):
+        name = item.get("name")
+        total = item.get("total_value")
+        if name and isinstance(total, dict) and total.get("value") is not None:
+            result[name] = total["value"]
+    return result
 
 
 def _resolve_media_type(raw_type: str, product_type: str) -> str:
@@ -193,6 +250,95 @@ class InstagramClient:
             "metric_type": "total_value",
         }
         return await self._request(url, params)
+
+    # ────────────────────── Day buckets & totals ──────────────────────
+
+    async def get_day_buckets(
+        self, since: datetime, until: datetime
+    ) -> tuple[list[DayBucket], dict[str, dict[str, int]]]:
+        """Discover Instagram's own day buckets plus the time-series metrics.
+
+        Returns (buckets, series); series maps metric name -> {day_key: value}
+        for time-series metrics (reach, follower_count). Day boundaries come
+        from the API's own end_time values, so every metric family can be
+        requested over exactly the same windows.
+        """
+        data = await self.get_account_insights(_to_unix(since), _to_unix(until))
+        ends: list[datetime] = []
+        raw_series: dict[str, dict[datetime, int]] = {}
+        for item in data.get("data", []):
+            name = item.get("name")
+            values_by_end: dict[datetime, int] = {}
+            for val in item.get("values", []):
+                end_time = val.get("end_time")
+                if not end_time:
+                    continue
+                try:
+                    end = parse_ig_timestamp(end_time)
+                except (TypeError, ValueError):
+                    logger.warning("Ignoring invalid insight end_time %s", end_time)
+                    continue
+                values_by_end[end] = val.get("value", 0)
+                ends.append(end)
+            raw_series[name] = values_by_end
+
+        ends = sorted(set(ends))
+        buckets: list[DayBucket] = []
+        for index, end in enumerate(ends):
+            previous = ends[index - 1] if index > 0 else None
+            if previous is not None and timedelta(0) < end - previous <= timedelta(hours=36):
+                start = previous
+            else:
+                start = end - timedelta(days=1)
+            buckets.append(DayBucket(start=start, end=end, label=bucket_label(start)))
+
+        series: dict[str, dict[str, int]] = {}
+        for name, values_by_end in raw_series.items():
+            by_label: dict[str, int] = {}
+            for bucket in buckets:
+                for end, value in values_by_end.items():
+                    if bucket.start < end <= bucket.end:
+                        by_label[bucket.day_key] = value
+                        break
+            series[name] = by_label
+        return buckets, series
+
+    async def get_account_totals(
+        self,
+        since: datetime,
+        until: datetime,
+        metrics: list[str] | None = None,
+    ) -> dict:
+        """Authoritative totals for any window via metric_type=total_value.
+
+        Unique metrics (reach, accounts_engaged) come back deduplicated for
+        the whole window — exactly what the Instagram app reports.
+        """
+        url = f"{self.base_url}/{self.user_id}/insights"
+        selected = metrics or ACCOUNT_PERIOD_TOTAL_METRICS
+        params = {
+            "metric": ",".join(selected),
+            "period": "day",
+            "since": str(_to_unix(since)),
+            "until": str(_to_unix(until)),
+            "metric_type": "total_value",
+        }
+        try:
+            data = await self._request(url, params)
+        except InstagramAPIError as error:
+            if set(selected) <= set(ACCOUNT_DAY_TOTAL_METRICS) and set(selected) != set(ACCOUNT_DAY_TOTAL_METRICS_CORE):
+                logger.warning("Account totals failed (%s); retrying core metric set", error)
+                params["metric"] = ",".join(ACCOUNT_DAY_TOTAL_METRICS_CORE)
+                data = await self._request(url, params)
+            else:
+                raise
+        return _parse_total_value_items(data)
+
+    async def get_account_day_totals(self, since: datetime, until: datetime) -> dict:
+        """Account-level metrics for one day bucket (single total_value call)."""
+        return await self.get_account_totals(
+            since, until, metrics=ACCOUNT_DAY_TOTAL_METRICS
+        )
 
     async def get_media_list(self, limit: int = 50) -> list[dict]:
         url = f"{self.base_url}/{self.user_id}/media"

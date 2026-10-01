@@ -28,6 +28,8 @@ Thumbs.db
 
 # Database
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
 
 # Local audit backups (contain .env copies)

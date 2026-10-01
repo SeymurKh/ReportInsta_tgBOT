@@ -46,6 +46,11 @@ class Settings:
     INSTAGRAM_API_VERSION: str = os.getenv("INSTAGRAM_API_VERSION", "v25.0")
     INSTAGRAM_BASE_URL: str = "https://graph.instagram.com"
 
+    # Instagram insight days are aligned to US Pacific midnight (values[]
+    # end_time lands at 07:00 UTC in summer / 08:00 UTC in winter). Day labels
+    # use this timezone so report dates match the Instagram app.
+    DAY_BUCKET_TIMEZONE: str = os.getenv("DAY_BUCKET_TIMEZONE", "America/Los_Angeles")
+
     # Instagram Accounts (loaded from .env INSTAGRAM_ACCOUNTS as JSON).
     # Each entry: {"name", "user_id", "access_token"}; optional "username" —
     # the real Instagram @username when it differs from the display name.

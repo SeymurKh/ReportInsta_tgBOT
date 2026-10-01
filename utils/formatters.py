@@ -161,8 +161,21 @@ def format_context_for_ai(context: dict) -> str:
             f"Подписчики сейчас: {followers_now if followers_now is not None else 'н/д'} "
             f"(прирост за период: {stats.get('followers_growth') if stats.get('followers_growth') is not None else 'н/д'})"
         )
-        lines.append(f"Охват: {stats.get('reach_total', 0)} | Просмотры: {stats.get('views_total', 0)}")
-        lines.append(f"Вовлечено: {stats.get('accounts_engaged_total', 0)}")
+        lines.append(
+            f"Охват (уникальные аккаунты за период): {stats.get('reach_total', 0)} | "
+            f"Просмотры: {stats.get('views_total', 0)}"
+        )
+        lines.append(
+            f"Вовлечённые аккаунты (уникальные): {stats.get('accounts_engaged_total', 0)} | "
+            f"Взаимодействия: {stats.get('total_interactions_total', 'н/д')} "
+            f"(лайки {stats.get('likes_total', 'н/д')}, комментарии {stats.get('comments_total', 'н/д')}, "
+            f"сохранения {stats.get('saves_total', 'н/д')}, репосты {stats.get('shares_total', 'н/д')})"
+        )
+        lines.append(
+            f"Просмотры профиля: {stats.get('profile_views_total', 'н/д')}. "
+            "Метрики аккаунта — итоговые/уникальные значения из Instagram API за период; "
+            "метрики публикаций и суммы по дням — другие величины, не сравнивай их напрямую."
+        )
         lines.append(f"Публикаций: {content.get('total_posts', 0)} (Reels: {content.get('total_reels', 0)}, "
                      f"Видео: {content.get('total_videos', 0)}, "
                      f"Фото: {content.get('total_images', 0)}, Карусели: {content.get('total_carousels', 0)})")

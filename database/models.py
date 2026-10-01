@@ -52,6 +52,21 @@ class DailyStats(Base):
     is_partial = Column(Boolean, default=False, nullable=False)
     metrics_present = Column(Text, nullable=True)  # JSON list; NULL means legacy/unknown
 
+    # Instagram day-bucket boundaries (naive UTC) — the row's `date` is the
+    # label of this bucket in settings.DAY_BUCKET_TIMEZONE.
+    bucket_start = Column(DateTime, nullable=True)
+    bucket_end = Column(DateTime, nullable=True)
+
+    # Account-level metrics from Instagram account insights (NOT post sums)
+    likes = Column(Integer, default=0)
+    comments = Column(Integer, default=0)
+    saves = Column(Integer, default=0)
+    shares = Column(Integer, default=0)
+    replies = Column(Integer, default=0)
+    total_interactions = Column(Integer, default=0)
+    profile_views = Column(Integer, default=0)
+    website_clicks = Column(Integer, default=0)
+
     __table_args__ = (
         UniqueConstraint("account_id", "date", name="uq_account_date"),
     )
@@ -144,6 +159,38 @@ class NotificationDelivery(Base):
     status = Column(String(16), default="pending", nullable=False)
     claimed_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+
+
+class PeriodSnapshot(Base):
+    """Authoritative period totals from the API (metric_type=total_value).
+
+    Unique metrics (reach, accounts_engaged) are only correct here: summing
+    daily rows double-counts accounts active on several days.
+    """
+
+    __tablename__ = "period_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    reach = Column(Integer, nullable=True)
+    accounts_engaged = Column(Integer, nullable=True)
+    views = Column(Integer, nullable=True)
+    likes = Column(Integer, nullable=True)
+    comments = Column(Integer, nullable=True)
+    saves = Column(Integer, nullable=True)
+    shares = Column(Integer, nullable=True)
+    total_interactions = Column(Integer, nullable=True)
+    profile_views = Column(Integer, nullable=True)
+    collected_at = Column(DateTime, nullable=True)
+    metrics_present = Column(Text, nullable=True)  # JSON list of metric names
+
+    account = relationship("Account")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "period_start", "period_end", name="uq_period_snapshot"),
+    )
 
 
 class SyncRun(Base):

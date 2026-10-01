@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from config import settings
 from database import crud
-from instagram.client import InstagramClient, utc_now_naive
+from instagram.client import InstagramClient, InstagramAPIError, utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -187,128 +187,148 @@ async def _renew_lease(account_id: int, owner: str) -> None:
 
 
 async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetime) -> dict:
-    """Fetch fresh data from Instagram API where needed and save to DB.
+    """Fetch fresh data from Instagram API and save to DB.
 
-    Uses the DB cache for days older than CACHE_FRESHNESS_HOURS and the
-    tiered refresh policy for post insights.
-    Returns {"api_delay_dates": [...], "partial": bool}.
-    All datetimes are naive UTC.
+    Days are Instagram's own day buckets (US Pacific days): time-series
+    metrics (reach, follower_count) come in one call, per-bucket account
+    metrics come from single total_value requests over exactly those buckets.
+    Days older than CACHE_FRESHNESS_HOURS are considered final and stay in the
+    DB cache. All datetimes are naive UTC.
     """
     logger.info(f"Syncing @{account.username} ({since_dt.date()} — {until_dt.date()})")
 
     now = utc_now_naive()
     freshness_cutoff = now - timedelta(hours=settings.CACHE_FRESHNESS_HOURS)
 
-    all_days = [since_dt.date() + timedelta(days=i)
-                for i in range((until_dt.date() - since_dt.date()).days + 1)]
-    saved = await crud.get_daily_stats(account.id, since_dt.date(), until_dt.date())
-    saved_dates = {s.date for s in saved}
-    saved_by_date = {s.date: s for s in saved}
-
-    # Days that are missing or still "fresh" (IG data can change within 48h)
-    days_to_fetch = {d for d in all_days
-                     if d not in saved_dates
-                     or _day_end(d) >= freshness_cutoff
-                     or (
-                         d >= now.date() - timedelta(days=settings.DATA_SYNC_WINDOW_DAYS)
-                         and getattr(saved_by_date[d], "metrics_present", None) is None
-                     )}
-
-    # Posts: sync whenever the window touches the freshness zone or is empty
-    posts_cached = await crud.get_posts(account.id, since_dt, until_dt)
-    refresh_posts = until_dt >= freshness_cutoff or not posts_cached
-
     partial = False
     partial_reasons: list[str] = []
+    failed_days: set[str] = set()
+    day_payloads: dict[str, dict] = {}
+
+    posts_cached = await crud.get_posts(account.id, since_dt, until_dt)
+    # Posts: sync whenever the window touches the freshness zone or is empty
+    refresh_posts = until_dt >= freshness_cutoff or not posts_cached
+
     user_info: dict = {}
     today_followers_delta = None
 
-    if days_to_fetch or refresh_posts:
-        client = InstagramClient(account.instagram_user_id, account.access_token)
+    client = InstagramClient(account.instagram_user_id, account.access_token)
+    try:
+        # 1. Instagram's own day buckets + time-series metrics
+        buckets, series = [], {}
         try:
-            if days_to_fetch:
-                snapshot = await client.collect_full_snapshot(
-                    _to_unix(since_dt), _to_unix(until_dt), days_to_fetch
-                )
-                user_info = snapshot["user_info"]
-                partial = partial or snapshot.get("partial", False)
-                if snapshot.get("partial"):
-                    partial_reasons.append("неполные дневные Insights")
-                partial_days = set(snapshot.get("partial_days", []))
-                metric_presence = snapshot.get("metric_presence", {})
-                for day_str, metrics in snapshot["insights"].items():
-                    day_date = date.fromisoformat(day_str)
-                    if day_date not in days_to_fetch:
-                        continue  # don't overwrite cached stable days
-                    await crud.save_daily_stats(
-                        account_id=account.id,
-                        stats_date=day_date,
-                        followers=None,  # set from a date-aligned follower snapshot
-                        following=user_info.get("follows_count"),
-                        media_count=user_info.get("media_count"),
-                        reach=metrics.get("reach"),
-                        follower_count=metrics.get("follower_count"),
-                        views=metrics.get("views"),
-                        accounts_engaged=metrics.get("accounts_engaged"),
-                        collected_at=now,
-                        is_partial=day_str in partial_days,
-                        metrics_present=metric_presence.get(day_str, []),
-                    )
-            else:
-                try:
-                    user_info = await client.get_user_info()
-                except Exception as e:
-                    logger.warning(f"user_info fetch failed for @{account.username}: {e}")
-                    partial = True
-                    partial_reasons.append("не удалось получить профильные поля")
+            buckets, series = await client.get_day_buckets(since_dt, until_dt)
+        except InstagramAPIError as error:
+            logger.error(f"Day buckets fetch failed for @{account.username}: {error}")
+            partial = True
+            partial_reasons.append("дневные метрики недоступны")
 
-            if user_info.get("followers_count") is not None:
-                await crud.update_current_followers(
-                    account.id, user_info["followers_count"], now
-                )
-                account.current_followers = user_info["followers_count"]
-                account.current_followers_at = now
+        saved = {
+            row.date: row
+            for row in await crud.get_daily_stats(account.id, since_dt.date(), until_dt.date())
+        }
+
+        # 2. Per-bucket account metrics for buckets that still change or are new
+        for bucket in buckets:
+            row = saved.get(bucket.label)
+            needs_refresh = (
+                bucket.end >= freshness_cutoff
+                or row is None
+                or getattr(row, "bucket_start", None) is None
+            )
+            if not needs_refresh and row is not None and row.metrics_present:
                 try:
-                    today_followers_delta = await client.get_current_day_follower_change(now)
-                except Exception as error:
-                    logger.warning(
-                        "Today's follower delta unavailable for @%s: %s",
-                        account.username, error,
-                    )
-                if today_followers_delta is None:
-                    partial = True
-                    partial_reasons.append("Instagram не вернул дневной прирост подписчиков")
-                    logger.warning(
-                        "Daily follower delta missing for @%s; current total was saved",
-                        account.username,
-                    )
-            else:
+                    present = set(json.loads(row.metrics_present))
+                except (TypeError, ValueError):
+                    present = set()
+                needs_refresh = "total_interactions" not in present
+            if not needs_refresh:
+                continue
+            try:
+                totals = await client.get_account_day_totals(bucket.start, bucket.end)
+            except InstagramAPIError as error:
+                logger.error(
+                    "Day metrics failed for @%s (%s): %s",
+                    account.username, bucket.day_key, error,
+                )
                 partial = True
-                partial_reasons.append("Instagram не вернул общий счётчик подписчиков")
+                failed_days.add(bucket.day_key)
+                totals = {}
+            day_payloads[bucket.day_key] = {"bucket": bucket, "totals": totals}
+
+        # 3. Persist refreshed buckets (time-series + account metrics together)
+        for day_key, payload in sorted(day_payloads.items()):
+            bucket = payload["bucket"]
+            totals = payload["totals"]
+            present = [name for name, values in series.items() if values.get(day_key) is not None]
+            present += [name for name in totals]
+            await crud.save_daily_stats(
+                account_id=account.id,
+                stats_date=bucket.label,
+                followers=None,  # set from a date-aligned follower snapshot
+                following=None,
+                media_count=None,
+                reach=series.get("reach", {}).get(day_key),
+                follower_count=series.get("follower_count", {}).get(day_key),
+                views=totals.get("views"),
+                accounts_engaged=totals.get("accounts_engaged"),
+                collected_at=now,
+                is_partial=day_key in failed_days,
+                metrics_present=present,
+                bucket_start=bucket.start,
+                bucket_end=bucket.end,
+                account_metrics=totals,
+            )
+        # 4. Profile totals
+        try:
+            user_info = await client.get_user_info()
+        except Exception as error:
+            logger.warning(f"user_info fetch failed for @{account.username}: {error}")
+            partial = True
+            partial_reasons.append("не удалось получить профильные поля")
+
+        if user_info.get("followers_count") is not None:
+            await crud.update_current_followers(
+                account.id, user_info["followers_count"], now
+            )
+            account.current_followers = user_info["followers_count"]
+            account.current_followers_at = now
+            try:
+                today_followers_delta = await client.get_current_day_follower_change(now)
+            except Exception as error:
                 logger.warning(
-                    "Current follower total missing from profile response for @%s",
-                    account.username,
+                    "Today's follower delta unavailable for @%s: %s",
+                    account.username, error,
                 )
+            if today_followers_delta is None:
+                partial = True
+                partial_reasons.append("Instagram не вернул дневной прирост подписчиков")
+        else:
+            partial = True
+            partial_reasons.append("Instagram не вернул общий счётчик подписчиков")
 
-            if refresh_posts:
-                insights_filter = make_insights_filter(posts_cached, now)
-                posts_data, posts_partial = await client.collect_posts_with_insights(
-                    since_dt, until_dt, insights_filter=insights_filter
-                )
-                partial = partial or posts_partial
-                if posts_partial:
-                    partial_reasons.append("часть Insights публикаций недоступна")
-                for p in posts_data:
-                    p["account_id"] = account.id
-                await crud.save_posts(posts_data)
-                # Clean up posts deleted from Instagram — only when the fetch
-                # was complete, otherwise we'd delete legit posts
-                if not posts_partial:
-                    fetched_ids = {p["instagram_media_id"] for p in posts_data}
-                    await crud.delete_stale_posts(account.id, since_dt, until_dt, fetched_ids)
-        finally:
-            await client.close()
+        # 5. Posts
+        if refresh_posts:
+            insights_filter = make_insights_filter(posts_cached, now)
+            posts_data, posts_partial = await client.collect_posts_with_insights(
+                since_dt, until_dt, insights_filter=insights_filter
+            )
+            partial = partial or posts_partial
+            if posts_partial:
+                partial_reasons.append("часть Insights публикаций недоступна")
+            for p in posts_data:
+                p["account_id"] = account.id
+            await crud.save_posts(posts_data)
+            # Clean up posts deleted from Instagram — only when the fetch
+            # was complete, otherwise we'd delete legit posts
+            if not posts_partial:
+                fetched_ids = {p["instagram_media_id"] for p in posts_data}
+                await crud.delete_stale_posts(account.id, since_dt, until_dt, fetched_ids)
 
+        # 6. Period totals (unique metrics) for the standard windows
+        await _refresh_standard_period_snapshots(client, account, until_dt.date(), now)
+    finally:
+        await client.close()
     # A profile total is useful even when the separate daily-delta metric is absent.
     if user_info.get("followers_count") is not None:
         today = now.date()
@@ -324,9 +344,10 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
         await fix_followers_history(account.id, user_info["followers_count"], today)
 
     # Missing days: within 48h = expected IG API delay, older = bug
+    expected_labels = [bucket.label for bucket in buckets]
     saved_stats = await crud.get_daily_stats(account.id, since_dt.date(), until_dt.date())
     saved_dates = {s.date for s in saved_stats}
-    missing = [d for d in all_days if d not in saved_dates]
+    missing = [d for d in expected_labels if d not in saved_dates]
 
     api_delay_dates = []
     for d in missing:
@@ -350,3 +371,59 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
         "partial": partial,
         "partial_reasons": list(dict.fromkeys(partial_reasons)),
     }
+
+
+def _day_start(d: date) -> datetime:
+    """Return the UTC start-of-day for a calendar date."""
+    return datetime(d.year, d.month, d.day)
+async def _refresh_standard_period_snapshots(
+    client: InstagramClient, account, period_end: date, now: datetime
+) -> None:
+    """Keep period totals (unique metrics) fresh for the standard windows."""
+    for window_days in (7, 14, 30, 90):
+        start = period_end - timedelta(days=window_days - 1)
+        try:
+            totals = await client.get_account_totals(_day_start(start), _day_end(period_end))
+        except InstagramAPIError as error:
+            logger.warning(
+                "Period totals %sd failed for @%s: %s", window_days, account.username, error
+            )
+            continue
+        await crud.upsert_period_snapshot(
+            account.id, start, period_end, totals, collected_at=now
+        )
+
+
+def _snapshot_to_dict(snapshot) -> dict:
+    return {name: getattr(snapshot, name, None) for name in crud.PERIOD_SNAPSHOT_METRICS}
+
+
+async def ensure_period_snapshot(account, date_from: date, date_to: date) -> dict:
+    """Authoritative API totals (unique metrics) for an arbitrary window.
+
+    Cached in period_snapshots; refetched when older than 6 hours so recent
+    windows pick up Instagram's 48h revisions.
+    """
+    now = utc_now_naive()
+    snapshot = await crud.get_period_snapshot(account.id, date_from, date_to)
+    if (
+        snapshot is not None
+        and getattr(snapshot, "collected_at", None) is not None
+        and now - snapshot.collected_at <= timedelta(hours=6)
+    ):
+        return _snapshot_to_dict(snapshot)
+
+    client = InstagramClient(account.instagram_user_id, account.access_token)
+    try:
+        totals = await client.get_account_totals(_day_start(date_from), _day_end(date_to))
+    except InstagramAPIError as error:
+        logger.warning(
+            "Period totals fetch failed for @%s (%s..%s): %s",
+            account.username, date_from, date_to, error,
+        )
+        return _snapshot_to_dict(snapshot) if snapshot is not None else {}
+    finally:
+        await client.close()
+
+    await crud.upsert_period_snapshot(account.id, date_from, date_to, totals, collected_at=now)
+    return totals

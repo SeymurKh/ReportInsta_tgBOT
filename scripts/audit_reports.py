@@ -187,6 +187,7 @@ async def _generate_report(account, daily, latest, posts, stories, date_from, da
     with (
         patch("reports.generator._fetch_and_save_data", new=no_sync),
         patch("reports.generator._refresh_stories_if_recent", new=no_story_refresh),
+        patch("reports.generator.ensure_period_snapshot", new=AsyncMock(return_value={})),
         patch("reports.generator.crud.get_daily_stats", new=AsyncMock(return_value=daily)),
         patch("reports.generator.crud.get_latest_stats", new=AsyncMock(return_value=latest)),
         patch("reports.generator.crud.get_posts", new=AsyncMock(return_value=posts)),
@@ -243,9 +244,9 @@ def _report_check_block(generated, account, independent, posts, stories):
     report_markers = {
         "current_followers": f"Текущие: {format_number(actual_stats['followers_current'])}",
         "followers_growth": f"Прирост за период: {format_growth(actual_stats['followers_growth'])} ({format_pct(actual_stats['followers_growth_pct'])})",
-        "daily_reach": f"Охват: {format_number(actual_stats['reach_total'])}",
+        "daily_reach": "Охват (аккаунты): " + (format_number(actual_stats["reach_total"]) if actual_stats["reach_total"] else "н/д"),
         "daily_views": "Просмотры: " + (format_number(actual_stats["views_total"]) if actual_stats["views_total"] > 0 else "н/д"),
-        "daily_engaged": "Вовлечено: " + (format_number(actual_stats["accounts_engaged_total"]) if actual_stats["accounts_engaged_total"] > 0 else "н/д"),
+        "daily_engaged": "Вовлечённые аккаунты (уникальные): " + (format_number(actual_stats["accounts_engaged_total"]) if actual_stats["accounts_engaged_total"] > 0 else "н/д"),
         "daily_average_reach": f"Средний охват/день: {format_number(actual_stats['reach_avg_daily'])}",
         "posts": f"📹 Контент ({actual_content['total_posts']} публикаций)",
         "media_types": f"Reels: {actual_content['total_reels']} | Видео: {actual_content['total_videos']} | Фото: {actual_content['total_images']} | Карусели: {actual_content['total_carousels']}",
@@ -364,6 +365,7 @@ async def _generate_comparison(account, daily, latest, posts, stories,
     with (
         patch("reports.generator._fetch_and_save_data", new=no_sync),
         patch("reports.generator._refresh_stories_if_recent", new=no_story_refresh),
+        patch("reports.generator.ensure_period_snapshot", new=AsyncMock(return_value={})),
         patch("reports.generator.crud.get_daily_stats", new=AsyncMock(side_effect=daily_for)),
         patch("reports.generator.crud.get_latest_stats", new=AsyncMock(return_value=latest)),
         patch("reports.generator.crud.get_posts", new=AsyncMock(side_effect=posts_for)),

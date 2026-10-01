@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from config import settings
 from database import crud
 from instagram.client import utc_now_naive
-from services.data_sync import sync_account_data
+from services.data_sync import ensure_period_snapshot, sync_account_data
 from analytics.calculations import (
     calculate_period_summary, calculate_content_summary, calculate_stories_summary,
     get_best_post, get_best_story, detect_trend, top_posts_by_metric,
@@ -40,6 +40,28 @@ def _current_followers_snapshot(account, latest_stats) -> tuple[int | None, date
     if metric_is_present(latest_stats, "followers_snapshot") or latest_stats.followers > 0:
         return latest_stats.followers, getattr(latest_stats, "collected_at", None)
     return None, None
+
+
+def _merge_period_totals(stats_summary: dict, totals: dict) -> dict:
+    """Prefer authoritative API totals (unique metrics) over sums of days.
+
+    Summing daily values double-counts accounts active on several days; the
+    API total_value for the whole window is what the Instagram app reports.
+    Day sums stay available under *_days_sum keys for the dynamics.
+    """
+    for api_key, summary_key in (
+        ("reach", "reach_total"),
+        ("views", "views_total"),
+        ("accounts_engaged", "accounts_engaged_total"),
+    ):
+        if totals.get(api_key) is not None:
+            stats_summary[f"{summary_key}_days_sum"] = stats_summary.get(summary_key)
+            stats_summary[summary_key] = totals[api_key]
+    for api_key in ("likes", "comments", "saves", "shares", "total_interactions", "profile_views"):
+        if totals.get(api_key) is not None:
+            stats_summary[f"{api_key}_total"] = totals[api_key]
+    stats_summary["totals_from_api"] = bool(totals)
+    return stats_summary
 
 
 def resolve_period(
@@ -188,6 +210,8 @@ async def generate_report(
     stories_list = await crud.get_stories(account.id, since_dt, until_dt)
 
     stats_summary = calculate_period_summary(stats_list)
+    totals = await ensure_period_snapshot(account, date_from, date_to)
+    stats_summary = _merge_period_totals(stats_summary, totals)
     content_summary = calculate_content_summary(posts_list)
     stories_summary = calculate_stories_summary(stories_list)
     data_quality = data_quality_summary(
@@ -244,8 +268,22 @@ async def generate_report(
         trend_label = f"Краткосрочный тренд (сравнение окон по {trend_window} дн.)"
     else:
         trend_label = "Краткосрочный тренд"
-    views_str = format_number(stats_summary['views_total']) if stats_summary['views_total'] > 0 else "н/д"
-    accounts_engaged_str = format_number(stats_summary['accounts_engaged_total']) if stats_summary['accounts_engaged_total'] > 0 else "н/д"
+    def metric_str(key: str) -> str:
+        value = stats_summary.get(key)
+        return format_number(value) if value else "н/д"
+
+    views_str = metric_str("views_total")
+    accounts_engaged_str = metric_str("accounts_engaged_total")
+    reach_str = metric_str("reach_total")
+    interactions_str = metric_str("total_interactions_total")
+    likes_str = metric_str("likes_total")
+    comments_str = metric_str("comments_total")
+    saves_str = metric_str("saves_total")
+    shares_str = metric_str("shares_total")
+    profile_views_str = metric_str("profile_views_total")
+    account_er_str = "н/д"
+    if stats_summary.get("total_interactions_total") and stats_summary.get("reach_total"):
+        account_er_str = f"{stats_summary['total_interactions_total'] / stats_summary['reach_total'] * 100:.1f}"
 
     # Publication calendar — group posts by date
     posts_by_date: dict[str, list] = {}
@@ -277,10 +315,13 @@ async def generate_report(
 Прирост за период: {format_growth(stats_summary['followers_growth'])} ({format_pct(stats_summary['followers_growth_pct'])})
 {trend_label}: {trend_map.get(trend, trend)}
 
-📈 Активность
-Охват: {format_number(stats_summary['reach_total'])}
+📈 Охват и активность (Instagram API, уникальные за период)
+Охват (аккаунты): {reach_str}
 Просмотры: {views_str}
-Вовлечено: {accounts_engaged_str}
+Вовлечённые аккаунты (уникальные): {accounts_engaged_str}
+Взаимодействия: {interactions_str} (❤ {likes_str} | 💬 {comments_str} | 💾 {saves_str} | 📤 {shares_str})
+Просмотры профиля: {profile_views_str}
+Вовлечённость аккаунта (взаимодействия/охват): {account_er_str}%
 Средний охват/день: {format_number(stats_summary['reach_avg_daily'])}
 
 📹 Контент ({content_summary['total_posts']} публикаций)
@@ -435,6 +476,10 @@ async def generate_comparison_periods_report(
 
     s1 = calculate_period_summary(p1_stats)
     s2 = calculate_period_summary(p2_stats)
+    t1 = await ensure_period_snapshot(account, period1_from, period1_to)
+    t2 = await ensure_period_snapshot(account, period2_from, period2_to)
+    s1 = _merge_period_totals(s1, t1)
+    s2 = _merge_period_totals(s2, t2)
     for summary, quality in (
         (s1, data_quality_summary(p1_stats, expected_days=period1_days)),
         (s2, data_quality_summary(p2_stats, expected_days=period2_days)),
@@ -633,6 +678,8 @@ async def generate_daily_digest(account, target_date: date | None = None) -> str
     stories_list = await crud.get_stories(account.id, since_dt, until_dt)
 
     summary = calculate_period_summary(stats_list)
+    totals = await ensure_period_snapshot(account, yesterday, yesterday)
+    summary = _merge_period_totals(summary, totals)
     latest_stats = await crud.get_latest_stats(account.id)
     current_followers, _ = _current_followers_snapshot(account, latest_stats)
     stories_summary = calculate_stories_summary(stories_list)

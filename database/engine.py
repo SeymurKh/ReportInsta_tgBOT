@@ -106,6 +106,26 @@ def _apply_lightweight_migrations(sync_conn) -> None:
             f"ALTER TABLE notification_deliveries ADD COLUMN claimed_at {timestamp_type}",
         ("notification_deliveries", "expires_at"):
             f"ALTER TABLE notification_deliveries ADD COLUMN expires_at {timestamp_type}",
+        ("daily_stats", "bucket_start"):
+            f"ALTER TABLE daily_stats ADD COLUMN bucket_start {timestamp_type}",
+        ("daily_stats", "bucket_end"):
+            f"ALTER TABLE daily_stats ADD COLUMN bucket_end {timestamp_type}",
+        ("daily_stats", "likes"):
+            "ALTER TABLE daily_stats ADD COLUMN likes INTEGER DEFAULT 0",
+        ("daily_stats", "comments"):
+            "ALTER TABLE daily_stats ADD COLUMN comments INTEGER DEFAULT 0",
+        ("daily_stats", "saves"):
+            "ALTER TABLE daily_stats ADD COLUMN saves INTEGER DEFAULT 0",
+        ("daily_stats", "shares"):
+            "ALTER TABLE daily_stats ADD COLUMN shares INTEGER DEFAULT 0",
+        ("daily_stats", "replies"):
+            "ALTER TABLE daily_stats ADD COLUMN replies INTEGER DEFAULT 0",
+        ("daily_stats", "total_interactions"):
+            "ALTER TABLE daily_stats ADD COLUMN total_interactions INTEGER DEFAULT 0",
+        ("daily_stats", "profile_views"):
+            "ALTER TABLE daily_stats ADD COLUMN profile_views INTEGER DEFAULT 0",
+        ("daily_stats", "website_clicks"):
+            "ALTER TABLE daily_stats ADD COLUMN website_clicks INTEGER DEFAULT 0",
     }
     for (table, column), ddl in migrations.items():
         if table in existing_tables and (table, column) not in existing_columns:

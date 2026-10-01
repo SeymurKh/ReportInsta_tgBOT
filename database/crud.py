@@ -7,7 +7,7 @@ from sqlalchemy import select, update, and_, text
 from sqlalchemy.exc import IntegrityError
 
 from database.engine import async_session_factory
-from database.models import Account, DailyStats, Post, Story, NotificationDelivery, SyncRun, SyncLease
+from database.models import Account, DailyStats, Post, Story, NotificationDelivery, PeriodSnapshot, SyncRun, SyncLease
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +319,13 @@ def _merge_metrics_present(existing_raw: str | None, new_metrics) -> str | None:
     return json.dumps(sorted(merged))
 
 
+# Account-level metric columns persisted per day bucket
+ACCOUNT_METRIC_FIELDS = (
+    "likes", "comments", "saves", "shares", "replies",
+    "total_interactions", "profile_views", "website_clicks",
+)
+
+
 async def save_daily_stats(
     account_id: int,
     stats_date: date,
@@ -332,6 +339,9 @@ async def save_daily_stats(
     collected_at: datetime | None = None,
     is_partial: bool | None = None,
     metrics_present: list[str] | None = None,
+    bucket_start: datetime | None = None,
+    bucket_end: datetime | None = None,
+    account_metrics: dict | None = None,
 ) -> None:
     async with async_session_factory() as session:
         existing = await session.execute(
@@ -341,18 +351,25 @@ async def save_daily_stats(
         )
         row = existing.scalar_one_or_none()
 
+        values: dict = {
+            "followers": followers,
+            "following": following,
+            "media_count": media_count,
+            "reach": reach,
+            "follower_count": follower_count,
+            "views": views,
+            "accounts_engaged": accounts_engaged,
+            "collected_at": collected_at,
+            "is_partial": is_partial,
+            "bucket_start": bucket_start,
+            "bucket_end": bucket_end,
+        }
+        if account_metrics:
+            for field in ACCOUNT_METRIC_FIELDS:
+                values[field] = account_metrics.get(field)
+
         if row:
-            for field, value in {
-                "followers": followers,
-                "following": following,
-                "media_count": media_count,
-                "reach": reach,
-                "follower_count": follower_count,
-                "views": views,
-                "accounts_engaged": accounts_engaged,
-                "collected_at": collected_at,
-                "is_partial": is_partial,
-            }.items():
+            for field, value in values.items():
                 if value is not None:
                     setattr(row, field, value)
             if metrics_present is not None:
@@ -366,6 +383,9 @@ async def save_daily_stats(
                 views=views or 0, accounts_engaged=accounts_engaged or 0,
                 collected_at=collected_at,
                 is_partial=bool(is_partial),
+                bucket_start=bucket_start,
+                bucket_end=bucket_end,
+                **{field: (account_metrics or {}).get(field) or 0 for field in ACCOUNT_METRIC_FIELDS},
                 metrics_present=(json.dumps(sorted(set(metrics_present)))
                                  if metrics_present is not None else None),
             ))
@@ -602,6 +622,66 @@ async def get_post_by_media_id(media_id: str) -> Optional[Post]:
     async with async_session_factory() as session:
         result = await session.execute(
             select(Post).where(Post.instagram_media_id == media_id)
+        )
+        return result.scalar_one_or_none()
+
+
+# ────────────────────── Period snapshots ──────────────────────
+
+PERIOD_SNAPSHOT_METRICS = (
+    "reach", "accounts_engaged", "views", "likes", "comments", "saves",
+    "shares", "total_interactions", "profile_views",
+)
+
+
+async def upsert_period_snapshot(
+    account_id: int,
+    period_start: date,
+    period_end: date,
+    totals: dict,
+    collected_at: datetime | None = None,
+) -> None:
+    """Persist authoritative API totals (unique metrics included) for a window."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(PeriodSnapshot).where(
+                PeriodSnapshot.account_id == account_id,
+                PeriodSnapshot.period_start == period_start,
+                PeriodSnapshot.period_end == period_end,
+            )
+        )
+        row = result.scalar_one_or_none()
+        seen = [name for name in PERIOD_SNAPSHOT_METRICS if totals.get(name) is not None]
+        if row is None:
+            row = PeriodSnapshot(
+                account_id=account_id,
+                period_start=period_start,
+                period_end=period_end,
+                collected_at=collected_at,
+                metrics_present=json.dumps(sorted(seen)),
+            )
+            session.add(row)
+        else:
+            if collected_at is not None:
+                row.collected_at = collected_at
+            row.metrics_present = _merge_metrics_present(row.metrics_present, seen)
+        for name in PERIOD_SNAPSHOT_METRICS:
+            value = totals.get(name)
+            if value is not None:
+                setattr(row, name, value)
+        await session.commit()
+
+
+async def get_period_snapshot(
+    account_id: int, period_start: date, period_end: date
+) -> Optional[PeriodSnapshot]:
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(PeriodSnapshot).where(
+                PeriodSnapshot.account_id == account_id,
+                PeriodSnapshot.period_start == period_start,
+                PeriodSnapshot.period_end == period_end,
+            )
         )
         return result.scalar_one_or_none()
 

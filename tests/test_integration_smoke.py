@@ -146,6 +146,11 @@ def test_full_report_pipeline_builds_context_from_mocked_data():
     async def run():
         with patch("reports.generator._fetch_and_save_data", new=AsyncMock(return_value={"api_delay_dates": [], "partial": False})), \
              patch("reports.generator._refresh_stories_if_recent", new=AsyncMock()), \
+             patch("reports.generator.ensure_period_snapshot", new=AsyncMock(return_value={
+                 "reach": 16663, "accounts_engaged": 1053, "views": 160856,
+                 "likes": 1674, "comments": 46, "saves": 120, "shares": 580,
+                 "total_interactions": 3024, "profile_views": 6627,
+             })), \
              patch("reports.generator.get_analyzer", return_value=None), \
              patch("reports.generator.crud.get_daily_stats", new=AsyncMock(return_value=stats)), \
              patch("reports.generator.crud.get_latest_stats", new=AsyncMock(return_value=stats[-1])), \
@@ -165,6 +170,10 @@ def test_full_report_pipeline_builds_context_from_mocked_data():
     assert context["format_performance"]["REELS"]["posts"] == 1
     assert context["data_quality"]["complete"] is True
     assert set(result["charts"]) == {"followers", "reach", "stories"}
+    # API period totals (unique metrics) must be preferred over sums of days
+    assert context["stats"]["reach_total"] == 16663
+    assert context["stats"]["reach_total_days_sum"] == 500
+    assert context["stats"]["total_interactions_total"] == 3024
 
 
 def test_comparison_report_handles_unknown_follower_growth():
@@ -173,6 +182,7 @@ def test_comparison_report_handles_unknown_follower_growth():
     async def run():
         with patch("reports.generator._fetch_and_save_data", new=AsyncMock(return_value={"api_delay_dates": [], "partial": False})), \
              patch("reports.generator._refresh_stories_if_recent", new=AsyncMock()), \
+             patch("reports.generator.ensure_period_snapshot", new=AsyncMock(return_value={})), \
              patch("reports.generator.get_analyzer", return_value=None), \
              patch("reports.generator.crud.get_daily_stats", new=AsyncMock(return_value=[])), \
              patch("reports.generator.crud.get_posts", new=AsyncMock(return_value=[])), \
@@ -198,6 +208,7 @@ def test_report_survives_skipped_sync_result_shape():
     async def run():
         with patch("reports.generator._fetch_and_save_data", new=AsyncMock(return_value=skipped)), \
              patch("reports.generator._refresh_stories_if_recent", new=AsyncMock()), \
+             patch("reports.generator.ensure_period_snapshot", new=AsyncMock(return_value={})), \
              patch("reports.generator.get_analyzer", return_value=None), \
              patch("reports.generator.crud.get_daily_stats", new=AsyncMock(return_value=[])), \
              patch("reports.generator.crud.get_latest_stats", new=AsyncMock(return_value=None)), \
@@ -221,6 +232,7 @@ def test_comparison_survives_skipped_sync_result_shape():
     async def run():
         with patch("reports.generator._fetch_and_save_data", new=AsyncMock(side_effect=[skipped, complete])), \
              patch("reports.generator._refresh_stories_if_recent", new=AsyncMock()), \
+             patch("reports.generator.ensure_period_snapshot", new=AsyncMock(return_value={})), \
              patch("reports.generator.get_analyzer", return_value=None), \
              patch("reports.generator.crud.get_daily_stats", new=AsyncMock(return_value=[])), \
              patch("reports.generator.crud.get_posts", new=AsyncMock(return_value=[])), \
@@ -234,4 +246,22 @@ def test_comparison_survives_skipped_sync_result_shape():
     result = asyncio.run(run())
     assert result["text"]
     assert "⚠️ Часть данных не удалось получить" in result["text"]
+
+
+def test_merge_period_totals_prefers_api_unique_metrics():
+    from reports.generator import _merge_period_totals
+
+    summary = {"reach_total": 36156, "views_total": 160856, "accounts_engaged_total": 1741}
+    totals = {"reach": 16663, "accounts_engaged": 1053, "views": 160856, "total_interactions": 3024}
+    merged = _merge_period_totals(summary, totals)
+    assert merged["reach_total"] == 16663
+    assert merged["reach_total_days_sum"] == 36156
+    assert merged["accounts_engaged_total"] == 1053
+    assert merged["views_total"] == 160856
+    assert merged["total_interactions_total"] == 3024
+    assert merged["totals_from_api"] is True
+
+    fallback = _merge_period_totals({"reach_total": 500}, {})
+    assert fallback["reach_total"] == 500
+    assert fallback["totals_from_api"] is False
 

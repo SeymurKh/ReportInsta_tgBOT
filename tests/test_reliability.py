@@ -373,6 +373,115 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(journal_mode, "wal")
         self.assertEqual(busy_timeout, 5000)
+
+    async def test_day_buckets_follow_instagram_boundaries(self):
+        """Regression: Instagram days are its own buckets (values[] end_time at
+        07:00 UTC in summer — US Pacific midnight). All metric families must be
+        requested over these exact windows and share one day label."""
+        from instagram.client import InstagramClient
+
+        client = InstagramClient("user", "token")
+        client.get_account_insights = AsyncMock(return_value={"data": [
+            {"name": "reach", "values": [
+                {"value": 601, "end_time": "2026-09-01T07:00:00+0000"},
+                {"value": 390, "end_time": "2026-09-02T07:00:00+0000"},
+            ]},
+            {"name": "follower_count", "values": [
+                {"value": 9, "end_time": "2026-09-01T07:00:00+0000"},
+                {"value": 2, "end_time": "2026-09-02T07:00:00+0000"},
+            ]},
+        ]})
+        buckets, series = await client.get_day_buckets(
+            datetime(2026, 8, 31), datetime(2026, 9, 3)
+        )
+        self.assertEqual([b.day_key for b in buckets], ["2026-08-31", "2026-09-01"])
+        self.assertEqual(buckets[0].start, datetime(2026, 8, 31, 7, 0))
+        self.assertEqual(buckets[0].end, datetime(2026, 9, 1, 7, 0))
+        self.assertEqual(series["reach"]["2026-08-31"], 601)
+        self.assertEqual(series["reach"]["2026-09-01"], 390)
+        self.assertEqual(series["follower_count"]["2026-09-01"], 2)
+
+    async def test_save_daily_stats_persists_account_level_metrics(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        with patch.object(crud, "async_session_factory", factory):
+            async with factory() as session:
+                account = Account(
+                    instagram_user_id="user", username="demo", name="Demo",
+                    access_token="token",
+                )
+                session.add(account)
+                await session.flush()
+                account_id = account.id
+
+            await crud.save_daily_stats(
+                account_id=account_id, stats_date=date(2026, 9, 14),
+                followers=None, following=None, media_count=None,
+                reach=5936, follower_count=12,
+                views=16438, accounts_engaged=307,
+                collected_at=datetime(2026, 9, 15, 12, 0), is_partial=False,
+                metrics_present=[
+                    "reach", "follower_count", "views", "accounts_engaged",
+                    "likes", "total_interactions",
+                ],
+                bucket_start=datetime(2026, 9, 14, 7, 0),
+                bucket_end=datetime(2026, 9, 15, 7, 0),
+                account_metrics={
+                    "likes": 297, "comments": 21, "saves": 27, "shares": 195,
+                    "total_interactions": 553, "profile_views": 300,
+                },
+            )
+            async with factory() as session:
+                row = (await session.execute(select(DailyStats))).scalar_one()
+                self.assertEqual(row.likes, 297)
+                self.assertEqual(row.shares, 195)
+                self.assertEqual(row.total_interactions, 553)
+                self.assertEqual(row.profile_views, 300)
+                self.assertEqual(row.bucket_start, datetime(2026, 9, 14, 7, 0))
+                self.assertEqual(row.bucket_end, datetime(2026, 9, 15, 7, 0))
+
+        await engine.dispose()
+
+    async def test_period_snapshot_round_trip(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        with patch.object(crud, "async_session_factory", factory):
+            async with factory() as session:
+                account = Account(
+                    instagram_user_id="user", username="demo", name="Demo",
+                    access_token="token",
+                )
+                session.add(account)
+                await session.flush()
+                account_id = account.id
+
+            await crud.upsert_period_snapshot(
+                account_id, date(2026, 9, 1), date(2026, 9, 29),
+                {"reach": 16663, "accounts_engaged": 1053, "views": 160856},
+                collected_at=datetime(2026, 9, 30, 12, 0),
+            )
+            await crud.upsert_period_snapshot(
+                account_id, date(2026, 9, 1), date(2026, 9, 29),
+                {"reach": 16700},
+                collected_at=datetime(2026, 10, 1, 12, 0),
+            )
+            snapshot = await crud.get_period_snapshot(
+                account_id, date(2026, 9, 1), date(2026, 9, 29)
+            )
+            self.assertEqual(snapshot.reach, 16700)
+            self.assertEqual(snapshot.views, 160856)
+            self.assertEqual(
+                set(json.loads(snapshot.metrics_present)),
+                {"reach", "accounts_engaged", "views"},
+            )
+
+        await engine.dispose()
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
