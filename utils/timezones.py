@@ -28,3 +28,22 @@ def app_now(now: datetime | None = None) -> datetime:
 def app_today(now: datetime | None = None) -> date:
     """Today's calendar date in APP_TIMEZONE."""
     return app_now(now).date()
+
+
+def app_datetime(naive_utc: datetime) -> datetime:
+    """A stored naive-UTC moment expressed in APP_TIMEZONE (for display).
+
+    Publication and story timestamps are events (moments), so users must see
+    them in their own timezone; daily insight rows stay UTC days.
+    """
+    current = (
+        naive_utc.replace(tzinfo=timezone.utc)
+        if naive_utc.tzinfo is None
+        else naive_utc.astimezone(timezone.utc)
+    )
+    return current.astimezone(app_tz())
+
+
+def app_date(naive_utc: datetime) -> date:
+    """Calendar date of a stored UTC moment as the user sees it."""
+    return app_datetime(naive_utc).date()

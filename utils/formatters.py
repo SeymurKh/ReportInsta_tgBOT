@@ -238,7 +238,7 @@ def format_context_for_ai(context: dict) -> str:
         story_header = [f"\nСторис: {stories['total_stories']} шт, просмотры {stories['total_views']} "
                         f"(ср. {stories['avg_views']}), охват {stories['total_reach']}, "
                         f"ответы {stories['total_replies']}, репосты {stories['total_shares']}, "
-                        f"выходы {stories['exit_rate']}%"]
+                        f"доля выходов (выход + уход) {stories['exit_rate']}%"]
         if stories.get("partial_insights_stories") or stories.get("legacy_unknown_insights"):
             story_header.append(
                 f"Полнота Insights сторис: неполных — {stories.get('partial_insights_stories', 0)}; "

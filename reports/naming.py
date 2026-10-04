@@ -31,7 +31,12 @@ SEC_COMPARISON = "📊 СРАВНЕНИЕ ПЕРИОДОВ"
 # ── Followers ──
 L_FOLLOWERS_NOW = "Сейчас"
 L_FOLLOWERS_GROWTH = "Прирост за период"
-L_GROWTH_SPEED = "Скорость роста (7 дн. к 7 дн.)"
+L_GROWTH_SPEED = "Скорость роста"
+
+
+def growth_speed_label(window: int) -> str:
+    """Dynamic window label — the compared windows are not always 7 days."""
+    return f"Скорость роста ({window} дн. к {window} дн.)"
 
 # ── Account activity (Instagram API period totals) ──
 L_REACH = "Охват (уникальные)"
@@ -40,17 +45,21 @@ L_ENGAGED = "Вовлечённые (уникальные)"
 L_INTERACTIONS = "Взаимодействия (все)"
 L_PROFILE_VIEWS = "Просмотры профиля"
 L_ACCOUNT_ER = "ER аккаунта"
-L_REACH_DAILY = "Средний охват в день"
+L_REACH_DAILY = "Средний дневной охват"
 
 # ── Publications ──
 L_POSTS = "Публикации"
 L_POST_LIKES = "Лайки на публикацию"
 L_POST_REACH = "Охват на публикацию"
 L_POST_ER = "ER публикаций"
+L_POST_COMMENTS = "Комментарии на публикацию"
+L_POST_SAVES = "Сохранения на публикацию"
+L_POST_SHARES = "Репосты на публикацию"
 
 # ── Comparison extras ──
 L_VIEWS_DAILY = "Просмотры в день"
-L_ENGAGED_DAILY = "Вовлечённые в день"
+L_ENGAGED_DAILY = "Вовлечённые в день (итог ÷ дни)"
+L_REACH_PER_DAY = "Охват в день (итог ÷ дни)"
 L_POST_LIKES_TOTAL = "Лайки публикаций"
 L_POST_COMMENTS_TOTAL = "Комментарии публикаций"
 L_POST_SAVES_TOTAL = "Сохранения публикаций"
@@ -64,7 +73,9 @@ L_STORIES_REPLIES = "Ответы"
 L_STORIES_SHARES = "Репосты"
 L_STORIES_PROFILE = "Переходы в профиль"
 L_STORIES_FOLLOWS = "Подписки со сторис"
-L_STORIES_EXIT = "Доля выходов"
+L_STORIES_EXIT = "Доля выходов (выход + уход)"
+L_STORIES_EXITS = "Выходы (тап «X»)"
+L_STORIES_SWIPE = "Ушли к другому аккаунту"
 L_STORIES_FORWARD = "Пролистнули вперёд"
 L_STORIES_BACK = "Вернулись назад"
 
@@ -88,6 +99,10 @@ LEGEND_ITEMS = [
     "• Охват и вовлечённые — уникальные аккаунты; просмотры — все показы, с повторами",
     "• Прирост % — от базы на начало периода; прирост — по дневным данным",
     "• ❤/💬/💾/📤 — метрики аккаунта; у публикаций — свои суммы",
+    "• День — UTC-день Instagram; даты публикаций и сторис — по вашему времени",
+    "• ER аккаунта = взаимодействия ÷ охват; ER публикаций — по total_interactions Insights",
+    "• Доля выходов = (выходы + уходы к другому аккаунту) ÷ просмотры сторис",
+    "• Средний дневной охват — среднее дневных значений",
 ]
 NOTE_ACCOUNT_GAP = (
     "ℹ️ Сверка взаимодействий аккаунта: {components} (❤💬💾📤) {sign}{gap} "

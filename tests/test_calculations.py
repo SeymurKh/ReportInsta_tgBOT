@@ -101,6 +101,34 @@ def test_content_summary_empty():
     assert c["engagement_rate"] == 0.0
 
 
+def test_story_and_post_summaries_expose_exit_components_and_post_averages():
+    from types import SimpleNamespace
+
+    from analytics.calculations import calculate_content_summary, calculate_stories_summary
+
+    posts = [
+        SimpleNamespace(media_type="REELS", likes=10, comments=2, saved=4, shares=2,
+                        reach=100, total_interactions=18, views=50),
+        SimpleNamespace(media_type="IMAGE", likes=0, comments=0, saved=0, shares=0,
+                        reach=50, total_interactions=0, views=0),
+    ]
+    content = calculate_content_summary(posts)
+    assert content["avg_comments"] == 1
+    assert content["avg_saves"] == 2
+    assert content["avg_shares"] == 1
+
+    story = SimpleNamespace(
+        views=100, reach=80, replies=2, shares=1, total_interactions=3,
+        profile_activity=1, follows=1,
+        tap_forward=10, tap_back=2, tap_exit=3, swipe_forward=1, is_active=True,
+    )
+    stories = calculate_stories_summary([story])
+    # «Доля выходов» must be backed by visible components: exits and swipes away
+    assert stories["tap_exit_total"] == 3
+    assert stories["swipe_forward_total"] == 1
+    assert stories["exit_rate"] == 4.0  # (3 + 1) / 100 views
+
+
 def test_content_summary_survives_corrupted_insights_metadata():
     """Regression: unguarded json.loads on insights_present crashed report
     generation when provenance metadata was corrupted (mirrors the stories

@@ -13,23 +13,25 @@ from analytics.calculations import (
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from reports.naming import (
     FENCE, L_ACCOUNT_ER, L_ENGAGED, L_ENGAGED_DAILY, L_FOLLOWERS_GROWTH,
-    L_FOLLOWERS_NOW, L_INTERACTIONS, L_POST_COMMENTS_TOTAL, L_POST_ER,
-    L_POST_LIKES, L_POST_LIKES_TOTAL, L_POST_REACH, L_POST_SAVES_TOTAL,
-    L_POST_SHARES_TOTAL, L_POSTS, L_PROFILE_VIEWS, L_REACH, L_REACH_DAILY,
-    L_STORIES_BACK, L_STORIES_COUNT, L_STORIES_EXIT, L_STORIES_FOLLOWS,
-    L_STORIES_FORWARD, L_STORIES_PROFILE, L_STORIES_REACH, L_STORIES_REPLIES,
-    L_STORIES_SHARES, L_STORIES_VIEWS, L_GROWTH_SPEED, L_VIEWS, L_VIEWS_DAILY,
+    L_FOLLOWERS_NOW, L_INTERACTIONS, L_POST_COMMENTS, L_POST_COMMENTS_TOTAL,
+    L_POST_ER, L_POST_LIKES, L_POST_LIKES_TOTAL, L_POST_REACH,
+    L_POST_SAVES, L_POST_SAVES_TOTAL, L_POST_SHARES, L_POST_SHARES_TOTAL,
+    L_POSTS, L_PROFILE_VIEWS, L_REACH, L_REACH_DAILY, L_REACH_PER_DAY,
+    L_STORIES_BACK, L_STORIES_COUNT, L_STORIES_EXIT, L_STORIES_EXITS,
+    L_STORIES_FOLLOWS, L_STORIES_FORWARD, L_STORIES_PROFILE, L_STORIES_REACH,
+    L_STORIES_REPLIES, L_STORIES_SHARES, L_STORIES_SWIPE, L_STORIES_VIEWS,
+    L_GROWTH_SPEED, L_VIEWS, L_VIEWS_DAILY,
     NOTE_ACCOUNT_GAP, NOTE_POST_GAP, GAP_EXTRA, GAP_RECOUNT, LEGEND_ITEMS,
     LEGEND_TITLE,
     SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_ADVERB,
-    DIVIDER_WIDTH, cmp_row, mono_block, table_section,
+    DIVIDER_WIDTH, cmp_row, growth_speed_label, mono_block, table_section,
 )
 from reports.charts import (
     create_followers_chart, create_metrics_chart,
     create_stories_chart, create_comparison_chart,
 )
 from utils.formatters import format_number, format_pct, format_period, format_growth, MONTHS_RU
-from utils.timezones import app_today
+from utils.timezones import app_date, app_datetime, app_today
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +180,7 @@ def _account_interaction_note(stats_summary: dict) -> str:
 
 def _stories_to_dicts(stories_list: list) -> list[dict]:
     return [{
-        "date": s.timestamp.strftime("%d.%m %H:%M"),
+        "date": app_datetime(s.timestamp).strftime("%d.%m %H:%M"),
         "media_type": s.media_type,
         "permalink": s.permalink,
         "views": s.views,
@@ -206,7 +208,7 @@ def _stories_footer_text(stories_summary: dict, stories_list: list) -> str:
     best = get_best_story(stories_list)
     if not best or best.views <= 0:
         return ""
-    day = best.timestamp
+    day = app_datetime(best.timestamp)
     return (
         f"🏆 Лучшая сторис: {day.day} {MONTHS_RU[day.month]} — "
         f"👁 {format_number(best.views)} | Охват {format_number(best.reach)} | 💬 {best.replies}"
@@ -218,7 +220,7 @@ def _stories_chart(stories_list: list) -> bytes | None:
         return None
     by_day: dict[date, int] = {}
     for s in stories_list:
-        d = s.timestamp.date()
+        d = app_date(s.timestamp)
         by_day[d] = by_day.get(d, 0) + s.views
     dates = sorted(by_day.keys())
     return create_stories_chart(dates, [by_day[d] for d in dates])
@@ -284,8 +286,10 @@ async def generate_report(
     # 7 days before — the trend is about "now", not about the whole period.
     values = [getattr(s, "follower_count", 0) or 0 for s in stats_list]
     growth_speed_val = "н/д"
+    growth_speed_row_label = L_GROWTH_SPEED
     if trend != "unknown" and len(values) >= 2:
         speed_window = min(7, max(1, len(values) // 2))
+        growth_speed_row_label = growth_speed_label(speed_window)
         baseline = values[-2 * speed_window:-speed_window] or values[:1]
         recent = values[-speed_window:]
         baseline_avg = sum(baseline) / len(baseline)
@@ -318,12 +322,13 @@ async def generate_report(
     reach_total = stats_summary.get("reach_total")
     interactions_total = stats_summary.get("total_interactions_total")
     if interactions_total is not None and reach_total:
-        account_er_str = f"{interactions_total / reach_total * 100:.1f}"
+        account_er_str = f"{interactions_total / reach_total * 100:.1f}%"
 
-    # Publication calendar — group posts by date
+    # Publication calendar — group posts by date (APP_TIMEZONE calendar,
+    # matching how the user selected the report period)
     posts_by_date: dict[str, list] = {}
     for p in posts_list:
-        posts_by_date.setdefault(p.timestamp.strftime("%Y-%m-%d"), []).append(p)
+        posts_by_date.setdefault(app_date(p.timestamp).strftime("%Y-%m-%d"), []).append(p)
 
     calendar_lines = []
     for day_key in sorted(posts_by_date.keys()):
@@ -354,7 +359,7 @@ async def generate_report(
         table_section(SEC_FOLLOWERS, [
             (L_FOLLOWERS_NOW, format_number(current_followers) if current_followers is not None else "н/д"),
             (L_FOLLOWERS_GROWTH, growth_val),
-            (L_GROWTH_SPEED, growth_speed_val),
+            (growth_speed_row_label, growth_speed_val),
         ]),
         table_section(SEC_ACTIVITY, [
             (L_REACH, reach_str),
@@ -362,12 +367,14 @@ async def generate_report(
             (L_ENGAGED, accounts_engaged_str),
             (L_INTERACTIONS, interactions_str),
             (L_PROFILE_VIEWS, profile_views_str),
-            (L_ACCOUNT_ER, f"{account_er_str}%"),
+            (L_ACCOUNT_ER, account_er_str),
             (L_REACH_DAILY, format_number(stats_summary["reach_avg_daily"])),
         ]),
         table_section(f"{SEC_CONTENT} ({content_summary['total_posts']})", [
-            (L_POSTS, str(content_summary["total_posts"])),
             (L_POST_LIKES, str(content_summary["avg_likes"])),
+            (L_POST_COMMENTS, str(content_summary["avg_comments"])),
+            (L_POST_SAVES, str(content_summary["avg_saves"])),
+            (L_POST_SHARES, str(content_summary["avg_shares"])),
             (L_POST_REACH, format_number(content_summary["avg_reach"])),
             (L_POST_ER, f"{content_summary['engagement_rate']}%"),
         ]),
@@ -382,9 +389,11 @@ async def generate_report(
                 (L_STORIES_SHARES, format_number(stories_summary["total_shares"])),
                 (L_STORIES_PROFILE, format_number(stories_summary["total_profile_activity"])),
                 (L_STORIES_FOLLOWS, format_number(stories_summary["total_follows"])),
-                (L_STORIES_EXIT, f"{stories_summary['exit_rate']}%"),
+                (L_STORIES_EXITS, format_number(stories_summary["tap_exit_total"])),
+                (L_STORIES_SWIPE, format_number(stories_summary["swipe_forward_total"])),
                 (L_STORIES_FORWARD, format_number(stories_summary["tap_forward_total"])),
                 (L_STORIES_BACK, format_number(stories_summary["tap_back_total"])),
+                (L_STORIES_EXIT, f"{stories_summary['exit_rate']}%"),
             ],
         ))
 
@@ -400,24 +409,27 @@ async def generate_report(
         f"из них по метрикам аккаунта: ❤ {likes_str} · 💬 {comments_str} · 💾 {saves_str} · 📤 {shares_str}",
         f"Форматы публикаций: {formats_line}",
         stories_footer,
+        ("" if stats_summary.get("totals_from_api") else
+         "ℹ️ Итоги API за период недоступны — охват и вовлечённые показаны суммой по дням (завышены из-за повторов)"),
         _account_interaction_note(stats_summary),
         _interaction_reconciliation_note(content_summary),
         LEGEND_TITLE,
         *LEGEND_ITEMS,
     ]
 
+    warnings_text = _warnings_block(
+        fetch_info.get("api_delay_dates", []), fetch_info.get("partial", False)
+    ).strip("\n")
+
     report_text = "\n\n".join(part for part in [
         f"📱 @{account.username} — {account.name}\n📅 Период: {period_str}",
         mono_block(tables),
         "\n".join(note for note in notes if note),
         f"📋 Публикации\n{publications_text}",
-        f"🏆 Лучший пост (максимум взвешенных взаимодействий на охват: лайки + 2×коммент. + 3×сохран. + 4×репосты)\n{best_info}",
+        f"🏆 Лучший пост (балл = (❤ + 2×💬 + 3×💾 + 4×📤) / охват × 100 — максимум за период)\n{best_info}",
+        warnings_text,
         f"🤖 AI-анализ\n{ai_analysis}",
     ] if part)
-
-    report_text += _warnings_block(
-        fetch_info.get("api_delay_dates", []), fetch_info.get("partial", False)
-    )
     metric_gaps = [
         f"{metric}: {missing} дн. без метрики"
         for metric, missing in data_quality["metric_missing_days"].items()
@@ -616,7 +628,7 @@ async def generate_comparison_periods_report(
             SEC_ACTIVITY, divider,
             cmp_line(L_FOLLOWERS_GROWTH, s1["followers_growth"], s2["followers_growth"]),
             cmp_line(L_REACH, s1["reach_total"], s2["reach_total"]),
-            cmp_line(L_REACH_DAILY, p1_reach_daily, p2_reach_daily, decimals=1),
+            cmp_line(L_REACH_PER_DAY, p1_reach_daily, p2_reach_daily, decimals=1),
             cmp_line(L_VIEWS, s1["views_total"], s2["views_total"]),
             cmp_line(L_VIEWS_DAILY, p1_views_daily, p2_views_daily, decimals=1),
             cmp_line(L_ENGAGED, s1["accounts_engaged_total"], s2["accounts_engaged_total"]),
@@ -702,8 +714,16 @@ async def generate_comparison_periods_report(
     else:
         ai_analysis = AI_UNAVAILABLE_TEXT
 
+    if not s1.get("totals_from_api") or not s2.get("totals_from_api"):
+        lines.append(
+            "ℹ️ Итоги API недоступны для одного из периодов — его показатели "
+            "показаны суммой по дням (завышены из-за повторов)"
+        )
+    warnings_text = _warnings_block(api_delay_dates, partial).strip("\n")
+    if warnings_text:
+        lines.append(warnings_text)
     lines.append(f"\n🤖 AI-сравнение\n{ai_analysis}")
-    text = "\n".join(lines) + _warnings_block(api_delay_dates, partial)
+    text = "\n".join(lines)
 
     chart_metrics = [
         ("followers_growth", "Прирост подписчиков", s1["followers_growth"], s2["followers_growth"]),

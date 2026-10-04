@@ -21,6 +21,19 @@ def test_app_now_accepts_naive_utc_input():
         assert app_now(datetime(2026, 10, 1, 21, 30)).date() == date(2026, 10, 2)
 
 
+def test_app_datetime_converts_stored_utc_to_app_timezone():
+    from datetime import datetime, timezone
+
+    from utils.timezones import app_date, app_datetime
+
+    naive_utc = datetime(2026, 9, 1, 22, 0)  # stored post timestamp
+    converted = app_datetime(naive_utc)
+    assert converted.tzinfo is not None
+    # the same instant, just rendered in the app timezone
+    assert converted.astimezone(timezone.utc).replace(tzinfo=None) == naive_utc
+    assert app_date(naive_utc) == converted.date()
+
+
 def test_resolve_period_uses_app_timezone_today():
     """Regression: report periods were computed from the UTC date, so between
     00:00 and 04:00 APP_TIMEZONE the default week ended a day too early."""

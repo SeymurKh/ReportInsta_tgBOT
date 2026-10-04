@@ -266,7 +266,7 @@ def generate_excel_report(
         _ss(ws_s["A4"])
         for col in (1, 2):
             ws_s.cell(row=4, column=col).border = THIN_BORDER
-        story_metrics = [("Количество сторис", "total_stories"), ("Просмотры (суммарно, с повторами)", "total_views"), ("Средние просмотры на сторис", "avg_views"), ("Охват (сумма по сторис)", "total_reach"), ("Средний охват на сторис", "avg_reach"), ("Ответы", "total_replies"), ("Репосты", "total_shares"), ("Переходы в профиль", "total_profile_activity"), ("Подписки со сторис", "total_follows"), ("Доля выходов, %", "exit_rate"), ("Пролистнули вперёд", "tap_forward_total"), ("Вернулись назад", "tap_back_total")]
+        story_metrics = [("Количество сторис", "total_stories"), ("Просмотры (суммарно, с повторами)", "total_views"), ("Средние просмотры на сторис", "avg_views"), ("Охват (сумма по сторис)", "total_reach"), ("Средний охват на сторис", "avg_reach"), ("Ответы", "total_replies"), ("Репосты", "total_shares"), ("Переходы в профиль", "total_profile_activity"), ("Подписки со сторис", "total_follows"), ("Выходы (тап «X»)", "tap_exit_total"), ("Ушли к другому аккаунту", "swipe_forward_total"), ("Пролистнули вперёд", "tap_forward_total"), ("Вернулись назад", "tap_back_total"), ("Доля выходов (выход + уход), %", "exit_rate")]
         for i, (label, key) in enumerate(story_metrics, 5):
             ws_s.cell(row=i, column=1, value=label)
             ws_s.cell(row=i, column=2, value=_pct(stories_summary.get(key, 0)) if " %" in label else stories_summary.get(key, 0))

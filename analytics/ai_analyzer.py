@@ -92,7 +92,8 @@ class AIAnalyzer:
             stories_line = (
                 f"Сторис: {stories_summary['total_stories']} шт.; просмотры {stories_summary['total_views']} "
                 f"(ср. {stories_summary['avg_views']}), охват {stories_summary['total_reach']}, "
-                f"ответы {stories_summary['total_replies']}, выходы {stories_summary['exit_rate']}%"
+                f"ответы {stories_summary['total_replies']}, "
+                f"доля выходов (выход + уход к другому аккаунту) {stories_summary['exit_rate']}%"
             )
         quality_line = ""
         if data_quality:
@@ -126,11 +127,11 @@ class AIAnalyzer:
 - Подписчики сейчас: {current_followers if current_followers is not None else 'н/д'}; прирост за период: {follower_growth if follower_growth is not None else 'н/д'} ({follower_growth_pct if follower_growth_pct is not None else 'н/д'}%)
 - Охват (уникальные): {stats_summary.get('reach_total', 0)}; Просмотры (с повторами): {stats_summary.get('views_total', 'н/д')}; Вовлечённые (уникальные): {stats_summary.get('accounts_engaged_total', 'н/д')}; Взаимодействия (все): {stats_summary.get('total_interactions_total', 'н/д')}; Просмотры профиля: {stats_summary.get('profile_views_total', 'н/д')}
 - Контент: {content_summary.get('total_posts', 0)} публикаций; Reels {content_summary.get('total_reels', 0)}; видео {content_summary.get('total_videos', 0)}; фото {content_summary.get('total_images', 0)}; карусели {content_summary.get('total_carousels', 0)}
-- Средние значения на публикацию: лайки {content_summary.get('avg_likes', 0)}; охват {content_summary.get('avg_reach', 0)}; ER публикаций {content_summary.get('engagement_rate', 0)}% (total_interactions Insights {content_summary.get('total_interactions', 'н/д')} / суммарный охват публикаций {content_summary.get('total_reach', 'н/д')})
+- Средние значения на публикацию: лайки {content_summary.get('avg_likes', 0)}; комментарии {content_summary.get('avg_comments', 0)}; сохранения {content_summary.get('avg_saves', 0)}; репосты {content_summary.get('avg_shares', 0)}; охват {content_summary.get('avg_reach', 0)}; ER публикаций {content_summary.get('engagement_rate', 0)}% (total_interactions Insights {content_summary.get('total_interactions', 'н/д')} / суммарный охват публикаций {content_summary.get('total_reach', 'н/д')})
 - Сверка взаимодействий: сумма ❤/💬/💾/📤 {content_summary.get('component_interactions', 'н/д')} + другие действия Instagram = total_interactions {content_summary.get('total_interactions', 'н/д')}. Это норма расширенного счётчика Instagram: не считай расхождение проблемой и не предлагай его исправлять.
 - {stories_line}
 - Качество данных:{quality_line or ' не указано'}
-- Лучший пост (по оценочному баллу: лайки + 2×комментарии + 3×сохранения + 4×репосты на охват; он не обязательно имеет максимальный охват): {best_post_info}
+- Лучший пост (по баллу (лайки + 2×комментарии + 3×сохранения + 4×репосты) / охват × 100; он не обязательно имеет максимальный охват): {best_post_info}
 - Скорость роста сейчас (сравнение соседних окон максимум по 7 дней, не прирост за весь период): {trend}
 
 ФОРМАТ: максимум 8 коротких строк.

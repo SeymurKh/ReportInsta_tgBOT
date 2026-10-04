@@ -230,9 +230,11 @@ def _report_check_block(generated, account, independent, posts, stories):
         _account_interaction_note, _interaction_reconciliation_note,
         TYPE_EMOJI, TYPE_NAME, WEEKDAYS_RU,
     )
+    from utils.timezones import app_date
     from reports.naming import (
         L_ENGAGED, L_FOLLOWERS_GROWTH, L_FOLLOWERS_NOW, L_POST_ER, L_POST_LIKES,
-        L_POST_REACH, L_POSTS, L_REACH, L_REACH_DAILY, L_STORIES_REACH,
+        L_POST_REACH, L_POST_COMMENTS, L_POST_SAVES, L_POST_SHARES,
+        L_REACH, L_REACH_DAILY, L_STORIES_REACH,
         L_STORIES_REPLIES, L_STORIES_SHARES, L_STORIES_VIEWS, L_VIEWS,
         SEC_CONTENT, SEC_STORIES, kv_row,
     )
@@ -266,8 +268,10 @@ def _report_check_block(generated, account, independent, posts, stories):
         "daily_engaged": kv_row(L_ENGAGED, value_str(actual_stats["accounts_engaged_total"])),
         "daily_average_reach": kv_row(L_REACH_DAILY, format_number(actual_stats["reach_avg_daily"])),
         "posts_title": f"{SEC_CONTENT} ({actual_content['total_posts']})",
-        "posts_count": kv_row(L_POSTS, str(actual_content["total_posts"])),
         "average_likes": kv_row(L_POST_LIKES, str(actual_content["avg_likes"])),
+        "average_comments": kv_row(L_POST_COMMENTS, str(actual_content["avg_comments"])),
+        "average_saves": kv_row(L_POST_SAVES, str(actual_content["avg_saves"])),
+        "average_shares": kv_row(L_POST_SHARES, str(actual_content["avg_shares"])),
         "average_reach": kv_row(L_POST_REACH, format_number(actual_content["avg_reach"])),
         "engagement_rate": kv_row(L_POST_ER, f"{actual_content['engagement_rate']}%"),
         "media_types": formats_line,
@@ -280,7 +284,7 @@ def _report_check_block(generated, account, independent, posts, stories):
     from utils.formatters import MONTHS_RU
     post_markers = []
     for post in posts:
-        day = post.timestamp.date()
+        day = app_date(post.timestamp)
         caption = post.caption[:50].replace("\n", " ").strip()
         if len(post.caption) > 50:
             caption += "..."
@@ -477,7 +481,7 @@ async def _audit_comparisons_for_account(conn, username):
         avail2 = context["period_days"]["available2"]
         checks["available_days"] = avail1 == independent_1["days"] and avail2 == independent_2["days"]
         text = generated["text"]
-        checks["text_has_headers"] = "📊 Сравнение периодов" in text and "Средний охват в день" in text
+        checks["text_has_headers"] = "📊 Сравнение периодов" in text and "Охват в день (итог ÷ дни)" in text
         checks["text_has_format_perf"] = "Форматы контента:" in text
         results.append({
             "account": username,

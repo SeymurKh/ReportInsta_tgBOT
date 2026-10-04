@@ -84,6 +84,7 @@ def calculate_content_summary(posts_list: list) -> dict:
             "total_interactions": 0, "total_reach": 0,
             "component_interactions": 0, "interaction_gap": 0,
             "avg_likes": 0, "avg_comments": 0, "avg_reach": 0,
+            "avg_saves": 0, "avg_shares": 0,
             "engagement_rate": 0.0,
             "legacy_unknown_insights": 0, "partial_insights_posts": 0,
             "missing_insight_metrics": {},
@@ -149,6 +150,8 @@ def calculate_content_summary(posts_list: list) -> dict:
         "avg_likes": round(total_likes / total) if total else 0,
         "avg_comments": round(total_comments / total) if total else 0,
         "avg_reach": round(total_reach / total) if total else 0,
+        "avg_saves": round(total_saves / total) if total else 0,
+        "avg_shares": round(total_shares / total) if total else 0,
         "engagement_rate": round(er, 1),
         "legacy_unknown_insights": len(posts_list) - len(known_posts),
         "partial_insights_posts": partial_insights_posts,
@@ -300,6 +303,7 @@ def calculate_stories_summary(stories_list: list) -> dict:
             "total_profile_activity": 0, "total_follows": 0,
             "avg_views": 0, "avg_reach": 0,
             "exit_rate": 0.0, "tap_forward_total": 0, "tap_back_total": 0,
+            "tap_exit_total": 0, "swipe_forward_total": 0,
             "legacy_unknown_insights": 0, "partial_insights_stories": 0,
             "missing_insight_metrics": {},
         }
@@ -342,6 +346,8 @@ def calculate_stories_summary(stories_list: list) -> dict:
         "exit_rate": exit_rate,
         "tap_forward_total": sum(s.tap_forward for s in stories_list),
         "tap_back_total": sum(s.tap_back for s in stories_list),
+        "tap_exit_total": sum(s.tap_exit for s in stories_list),
+        "swipe_forward_total": sum(s.swipe_forward for s in stories_list),
         "legacy_unknown_insights": len(stories_list) - len(known_stories),
         "partial_insights_stories": partial_insights_stories,
         "missing_insight_metrics": {
