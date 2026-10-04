@@ -43,6 +43,12 @@ def _day_end(value: date) -> datetime:
     return datetime(value.year, value.month, value.day, 23, 59, 59)
 
 
+def metric_str(stats_summary: dict, key: str) -> str:
+    """Period metric for display: a missing metric is «н/д», a real zero is «0»."""
+    value = stats_summary.get(key)
+    return format_number(value) if value is not None else "н/д"
+
+
 def _current_followers_snapshot(account, latest_stats) -> tuple[int | None, datetime | None]:
     value = getattr(account, "current_followers", None)
     observed_at = getattr(account, "current_followers_at", None)
@@ -299,22 +305,20 @@ async def generate_report(
     else:
         ai_analysis = AI_UNAVAILABLE_TEXT
 
-    def metric_str(key: str) -> str:
-        value = stats_summary.get(key)
-        return format_number(value) if value else "н/д"
-
-    views_str = metric_str("views_total")
-    accounts_engaged_str = metric_str("accounts_engaged_total")
-    reach_str = metric_str("reach_total")
-    interactions_str = metric_str("total_interactions_total")
-    likes_str = metric_str("likes_total")
-    comments_str = metric_str("comments_total")
-    saves_str = metric_str("saves_total")
-    shares_str = metric_str("shares_total")
-    profile_views_str = metric_str("profile_views_total")
+    views_str = metric_str(stats_summary, "views_total")
+    accounts_engaged_str = metric_str(stats_summary, "accounts_engaged_total")
+    reach_str = metric_str(stats_summary, "reach_total")
+    interactions_str = metric_str(stats_summary, "total_interactions_total")
+    likes_str = metric_str(stats_summary, "likes_total")
+    comments_str = metric_str(stats_summary, "comments_total")
+    saves_str = metric_str(stats_summary, "saves_total")
+    shares_str = metric_str(stats_summary, "shares_total")
+    profile_views_str = metric_str(stats_summary, "profile_views_total")
     account_er_str = "н/д"
-    if stats_summary.get("total_interactions_total") and stats_summary.get("reach_total"):
-        account_er_str = f"{stats_summary['total_interactions_total'] / stats_summary['reach_total'] * 100:.1f}"
+    reach_total = stats_summary.get("reach_total")
+    interactions_total = stats_summary.get("total_interactions_total")
+    if interactions_total is not None and reach_total:
+        account_er_str = f"{interactions_total / reach_total * 100:.1f}"
 
     # Publication calendar — group posts by date
     posts_by_date: dict[str, list] = {}

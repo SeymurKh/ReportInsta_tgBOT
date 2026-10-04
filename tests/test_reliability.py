@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from database import crud
 from database.engine import _apply_lightweight_migrations, _normalize_sqlite_datetime_strings
-from database.models import Account, Base, DailyStats, SyncLease, SyncRun
+from database.models import Account, Base, DailyStats, Post, SyncLease, SyncRun
 from instagram.client import InstagramAPIError, InstagramClient, TokenExpiredError
 from services.data_sync import _account_lock, make_insights_filter, sync_account_data
 from services.scheduler import _sync_with_backoff
@@ -94,6 +94,56 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([account.sync_status for account in persisted_accounts], ["failed", "running", "failed"])
         self.assertEqual(persisted_runs[0].finished_at, now)
         self.assertIn("interrupted", persisted_accounts[0].last_sync_error)
+
+    async def test_save_posts_provenance_is_cumulative_on_partial_refresh(self):
+        """Regression: a failed/partial insights fetch used to overwrite
+        insights_present with [], erasing knowledge about metrics seen in
+        earlier refreshes (daily stats and stories already merge cumulatively)."""
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        base = {
+            "instagram_media_id": "media-1",
+            "media_type": "IMAGE",
+            "caption": "cap",
+            "permalink": "link",
+            "timestamp": datetime(2026, 9, 28, 12),
+            "likes": 5,
+            "comments": 1,
+        }
+        full_provenance = ["reach", "saved", "shares", "total_interactions", "views"]
+        with patch.object(crud, "async_session_factory", factory):
+            account = await crud.save_or_update_account("ig-1", "demo", "Demo", "token")
+            await crud.save_posts([{
+                **base,
+                "account_id": account.id,
+                "saved": 2, "shares": 1, "reach": 100,
+                "total_interactions": 9, "views": 50,
+                "skip_insights": False,
+                "insights_present": full_provenance,
+            }])
+            # a later refresh failed: no values came back and the API reported
+            # no metrics — nothing may be erased
+            await crud.save_posts([{
+                **base,
+                "account_id": account.id,
+                "saved": None, "shares": None, "reach": None,
+                "total_interactions": None, "views": None,
+                "skip_insights": False,
+                "insights_present": [],
+            }])
+            async with factory() as session:
+                row = (await session.execute(
+                    select(Post).where(Post.instagram_media_id == "media-1")
+                )).scalar_one()
+
+        await engine.dispose()
+        self.assertEqual(set(json.loads(row.insights_present)), set(full_provenance))
+        self.assertEqual(row.reach, 100)
+        self.assertEqual(row.views, 50)
+        self.assertEqual(row.saved, 2)
 
     async def test_skipped_sync_returns_full_result_shape(self):
         """Regression: skipped syncs (asyncio lock or DB lease held) must return

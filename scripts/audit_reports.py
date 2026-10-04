@@ -242,7 +242,8 @@ def _report_check_block(generated, account, independent, posts, stories):
         expected_note in text if expected_note else "Сверка взаимодействий публикаций" not in text
     )
     def value_str(value):
-        return format_number(value) if value else "н/д"
+        # Mirrors reports.generator.metric_str: a real zero stays «0».
+        return format_number(value) if value is not None else "н/д"
 
     growth = actual_stats["followers_growth"]
     if growth is None:

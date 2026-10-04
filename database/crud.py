@@ -511,7 +511,9 @@ async def save_posts(posts_data: list[dict]) -> None:
     """Upsert posts. Posts with skip_insights=True keep their stored insight
     metrics (reach/saved/shares/views/total_interactions) — only the free
     fields (likes/comments/caption/etc.) are updated. Prevents overwriting
-    good data with zeros for posts we intentionally did not re-fetch."""
+    good data with zeros for posts we intentionally did not re-fetch.
+    insights_present provenance is cumulative — a partial refresh never
+    erases metrics known from earlier fetches."""
     if not posts_data:
         return
     async with async_session_factory() as session:
@@ -543,8 +545,13 @@ async def save_posts(posts_data: list[dict]) -> None:
                             insights_updated = True
                     if insights_updated:
                         row.insights_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                    # Provenance is cumulative (same policy as daily stats and
+                    # stories): a partial or failed insights fetch must not
+                    # erase knowledge about metrics seen in earlier refreshes.
                     if post.get("insights_present") is not None:
-                        row.insights_present = json.dumps(sorted(set(post["insights_present"])))
+                        row.insights_present = _merge_metrics_present(
+                            row.insights_present, post["insights_present"]
+                        )
             else:
                 post["caption"] = post.get("caption") or ""
                 post["permalink"] = post.get("permalink") or ""
@@ -559,7 +566,9 @@ async def save_posts(posts_data: list[dict]) -> None:
                 if not skip_insights and has_insights:
                     post["insights_updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
                 if post.get("insights_present") is not None:
-                    post["insights_present"] = json.dumps(sorted(set(post["insights_present"])))
+                    post["insights_present"] = _merge_metrics_present(
+                        None, post["insights_present"]
+                    )
                 session.add(Post(**post))
 
         await session.commit()

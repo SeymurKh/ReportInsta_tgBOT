@@ -60,6 +60,39 @@ def test_empty_message_is_replaced_with_fallback():
     assert message.messages[0]
 
 
+def test_send_long_text_monospace_chunks_fit_fenced_message():
+    """Regression: a fenced (```) chunk plus its wrapper used to exceed the
+    Telegram message limit and the whole chunk was rejected."""
+    from bot.helpers import FENCE, MAX_MESSAGE_LEN
+
+    class FakeMessage:
+        def __init__(self):
+            self.messages = []
+
+        async def answer(self, text, **kwargs):
+            self.messages.append(text)
+
+    table_line = "метрика " + "ю" * 60
+    mono_body = "\n".join([table_line] * 70)  # > 4096 chars of table
+    message = FakeMessage()
+    asyncio.run(send_long_text(message, f"{FENCE}\n{mono_body}\n{FENCE}"))
+
+    assert len(message.messages) > 1
+    for sent in message.messages:
+        assert len(sent) <= MAX_MESSAGE_LEN
+        assert sent.startswith(FENCE) and sent.endswith(FENCE)
+
+
+def test_metric_str_keeps_real_zero_and_marks_missing():
+    from reports.generator import metric_str
+
+    assert metric_str({"likes_total": 0}, "likes_total") == "0"
+    assert metric_str({"saves_total": 0}, "saves_total") == "0"
+    assert metric_str({}, "likes_total") == "н/д"
+    assert metric_str({"likes_total": None}, "likes_total") == "н/д"
+    assert metric_str({"reach_total": 1234}, "reach_total") == "1 234"
+
+
 def test_comparison_excel_contains_comparison_sheet():
     context = {
         "account_username": "test",

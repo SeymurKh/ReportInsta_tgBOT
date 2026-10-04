@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_LEN = 4096
 
 
-def split_message_text(text: str, max_len: int = MAX_MESSAGE_LEN) -> list[str]:
-    """Split text into Telegram-sized chunks at line boundaries.
+def _split_at_line_boundaries(text: str, max_len: int) -> list[str]:
+    """Split text into chunks at line boundaries without any reordering.
 
     Words are never broken mid-way; a single oversized line is hard-split as a
     last resort. Every chunk is non-empty and <= max_len.
@@ -36,17 +36,38 @@ def split_message_text(text: str, max_len: int = MAX_MESSAGE_LEN) -> list[str]:
             current = parts[-1]
     if current:
         chunks.append(current)
-    # Keep calendar headers with their posts: move a trailing "📅 ..." line to
-    # the next message instead of leaving it orphaned at the end of a chunk.
-    for index in range(len(chunks) - 1):
-        head, separator, tail = chunks[index].rpartition("\n")
-        if tail.startswith("📅 "):
-            chunks[index] = head
-            chunks[index + 1] = tail + "\n" + chunks[index + 1]
     return chunks
 
 
+def split_message_text(text: str, max_len: int = MAX_MESSAGE_LEN) -> list[str]:
+    """Split text into Telegram-sized chunks at line boundaries.
+
+    Thin wrapper over _split_at_line_boundaries that additionally keeps
+    calendar headers ("📅 ...") attached to their posts. Every chunk is
+    non-empty and <= max_len.
+    """
+    chunks = _split_at_line_boundaries(text, max_len)
+    # Keep calendar headers with their posts: move a trailing "📅 ..." line to
+    # the next message instead of leaving it orphaned at the end of a chunk.
+    # If the move would overflow the next message, re-split that message at
+    # line boundaries first — every chunk keeps honoring max_len.
+    for index in range(len(chunks) - 1):
+        while True:
+            head, _separator, tail = chunks[index].rpartition("\n")
+            if not tail.startswith("📅 "):
+                break
+            moved = tail + "\n" + chunks[index + 1]
+            chunks[index] = head
+            if len(moved) <= max_len:
+                chunks[index + 1] = moved
+            else:
+                chunks[index + 1:index + 2] = _split_at_line_boundaries(moved, max_len)
+    return [chunk for chunk in chunks if chunk]
+
+
 FENCE = "```"
+# "```\n" + chunk + "\n```" — the wrapper must fit into Telegram's limit too.
+MONO_WRAPPER_LEN = len(FENCE) * 2 + 2
 
 
 def split_fenced_segments(text: str) -> list[tuple[bool, str]]:
@@ -77,7 +98,8 @@ async def send_long_text(message: Message, text: str) -> None:
         body = body.strip("\n")
         if not body.strip():
             continue
-        for chunk in split_message_text(body):
+        chunk_limit = MAX_MESSAGE_LEN - (MONO_WRAPPER_LEN if is_mono else 0)
+        for chunk in split_message_text(body, chunk_limit):
             if not chunk.strip():
                 continue
             if is_mono:

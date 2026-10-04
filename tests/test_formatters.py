@@ -230,3 +230,23 @@ def test_split_message_text_preserves_short_lines_unsplit():
     text = "⚠️ Контроль действий: сумма лайков, комментариев, сохранений и репостов"
     chunks = split_message_text(text, max_len=4096)
     assert chunks == [text]
+
+
+def test_split_message_text_calendar_header_move_respects_limit():
+    """Regression: moving a trailing «📅 ...» header to the next chunk must
+    never push that chunk over max_len (Telegram rejects oversized messages)."""
+    from bot.helpers import split_message_text
+
+    max_len = 60
+    header = "📅 25 сентября (Пт):"
+    posts = [f'  🎬 Reels | "пост {i}"' + "ю" * 20 for i in range(10)]
+    text = "\n".join(["а" * 30, header] + posts)
+
+    chunks = split_message_text(text, max_len=max_len)
+
+    assert chunks
+    assert all(0 < len(c) <= max_len for c in chunks)
+    # the header never ends a chunk — it always travels with its posts
+    for chunk in chunks[:-1]:
+        assert not chunk.split("\n")[-1].startswith("📅 ")
+    assert "\n".join(chunks) == text  # lossless
