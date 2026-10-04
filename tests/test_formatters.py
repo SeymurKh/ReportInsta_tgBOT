@@ -18,8 +18,8 @@ def test_format_number():
 
 
 def test_format_pct():
-    assert format_pct(5.3) == "+5.3%"
-    assert format_pct(-2.1) == "-2.1%"
+    assert format_pct(5.3) == "+5,3%"
+    assert format_pct(-2.1) == "-2,1%"
 
 
 def test_format_period():

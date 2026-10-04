@@ -20,9 +20,7 @@ from reports.naming import (
     L_STORIES_BACK, L_STORIES_COUNT, L_STORIES_EXIT, L_STORIES_EXITS,
     L_STORIES_FOLLOWS, L_STORIES_FORWARD, L_STORIES_PROFILE, L_STORIES_REACH,
     L_STORIES_REPLIES, L_STORIES_SHARES, L_STORIES_SWIPE, L_STORIES_VIEWS,
-    L_GROWTH_SPEED, L_VIEWS, L_VIEWS_DAILY,
-    NOTE_ACCOUNT_GAP, NOTE_POST_GAP, GAP_EXTRA, GAP_RECOUNT, LEGEND_ITEMS,
-    LEGEND_TITLE,
+    L_GROWTH_SPEED, L_VIEWS, L_VIEWS_DAILY, PLAIN_WORDS,
     SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_ADVERB,
     DIVIDER_WIDTH, cmp_row, growth_speed_label, mono_block, table_section,
 )
@@ -30,7 +28,7 @@ from reports.charts import (
     create_followers_chart, create_metrics_chart,
     create_stories_chart, create_comparison_chart,
 )
-from utils.formatters import format_number, format_pct, format_period, format_growth, MONTHS_RU
+from utils.formatters import format_number, format_pct, format_period, format_growth, format_rate, MONTHS_RU
 from utils.timezones import app_date, app_datetime, app_today
 
 logger = logging.getLogger(__name__)
@@ -138,43 +136,44 @@ def _warnings_block(api_delay_dates: list[str], partial: bool) -> str:
     return ("\n\n" + "\n".join(parts)) if parts else ""
 
 
-def _interaction_reconciliation_note(content_summary: dict, period: str = "") -> str:
-    gap = content_summary.get("interaction_gap", 0)
-    if not gap:
-        return ""
-    label = f" за {period}" if period else ""
-    sign = "+" if gap > 0 else "−"
-    return NOTE_POST_GAP.format(
-        label=label,
-        components=format_number(content_summary.get("component_interactions", 0) or 0),
-        total=format_number(content_summary.get("total_interactions", 0) or 0),
-        sign=sign,
-        gap=format_number(abs(gap)),
-        explanation=GAP_EXTRA if gap > 0 else GAP_RECOUNT,
-    )
+_RU_METRIC_NAMES = {
+    "follower_count": "прирост подписчиков",
+    "followers_snapshot": "подписчики",
+    "reach": "охват",
+    "views": "просмотры",
+    "accounts_engaged": "вовлечённые",
+    "likes": "лайки",
+    "comments": "комментарии",
+    "saves": "сохранения",
+    "shares": "репосты",
+    "total_interactions": "взаимодействия",
+    "profile_views": "просмотры профиля",
+}
 
 
-def _account_interaction_note(stats_summary: dict) -> str:
-    """Identity-style note: extended Instagram counter = 4 visible + the rest."""
-    total = stats_summary.get("total_interactions_total")
-    likes = stats_summary.get("likes_total")
-    comments = stats_summary.get("comments_total")
-    saves = stats_summary.get("saves_total")
-    shares = stats_summary.get("shares_total")
-    if total is None or None in (likes, comments, saves, shares):
-        return ""
-    components = likes + comments + saves + shares
-    gap = total - components
-    if gap == 0:
-        return ""
-    sign = "+" if gap > 0 else "−"
-    return NOTE_ACCOUNT_GAP.format(
-        components=format_number(components),
-        total=format_number(total),
-        sign=sign,
-        gap=format_number(abs(gap)),
-        explanation=GAP_EXTRA if gap > 0 else GAP_RECOUNT,
-    )
+def _data_quality_warnings(data_quality: dict, content_summary: dict, stories_summary: dict) -> list[str]:
+    """Only real data problems, in plain words — service notes stay out of the report."""
+    parts = []
+    missing = [
+        f"{_RU_METRIC_NAMES.get(name, name)} — {count} дн."
+        for name, count in data_quality["metric_missing_days"].items()
+        if count
+    ]
+    if missing:
+        parts.append("⚠️ Нет данных: " + ", ".join(missing))
+    if data_quality.get("invalid_metadata_days"):
+        parts.append(
+            f"⚠️ Повреждены служебные данные у {data_quality['invalid_metadata_days']} дн."
+        )
+    if content_summary.get("partial_insights_posts"):
+        parts.append(
+            f"⚠️ У {content_summary['partial_insights_posts']} публ. метрики собраны не полностью"
+        )
+    if stories_summary.get("partial_insights_stories"):
+        parts.append(
+            f"⚠️ У {stories_summary['partial_insights_stories']} сторис метрики собраны не полностью"
+        )
+    return parts
 
 # ────────────────────── Stories helpers ──────────────────────
 
@@ -322,7 +321,7 @@ async def generate_report(
     reach_total = stats_summary.get("reach_total")
     interactions_total = stats_summary.get("total_interactions_total")
     if interactions_total is not None and reach_total:
-        account_er_str = f"{interactions_total / reach_total * 100:.1f}%"
+        account_er_str = format_rate(interactions_total / reach_total * 100)
 
     # Publication calendar — group posts by date (APP_TIMEZONE calendar,
     # matching how the user selected the report period)
@@ -376,7 +375,7 @@ async def generate_report(
             (L_POST_SAVES, str(content_summary["avg_saves"])),
             (L_POST_SHARES, str(content_summary["avg_shares"])),
             (L_POST_REACH, format_number(content_summary["avg_reach"])),
-            (L_POST_ER, f"{content_summary['engagement_rate']}%"),
+            (L_POST_ER, format_rate(content_summary["engagement_rate"])),
         ]),
     ]
     if stories_summary.get("total_stories"):
@@ -393,7 +392,7 @@ async def generate_report(
                 (L_STORIES_SWIPE, format_number(stories_summary["swipe_forward_total"])),
                 (L_STORIES_FORWARD, format_number(stories_summary["tap_forward_total"])),
                 (L_STORIES_BACK, format_number(stories_summary["tap_back_total"])),
-                (L_STORIES_EXIT, f"{stories_summary['exit_rate']}%"),
+                (L_STORIES_EXIT, format_rate(stories_summary["exit_rate"])),
             ],
         ))
 
@@ -405,60 +404,49 @@ async def generate_report(
     if content_summary["total_videos"]:
         formats_line += f" · 🎥 Видео {content_summary['total_videos']}"
 
+    # Visible interaction components + the un-decomposed remainder — the line
+    # adds up to «Взаимодействия (все)» without any service commentary.
+    comp_keys = ("likes_total", "comments_total", "saves_total", "shares_total")
+    interaction_line = ""
+    if interactions_total is not None and all(stats_summary.get(k) is not None for k in comp_keys):
+        gap = interactions_total - sum(stats_summary[k] for k in comp_keys)
+        other_actions = f" · прочие действия {format_number(gap)}" if gap > 0 else ""
+        interaction_line = (
+            f"из них по метрикам аккаунта: ❤ {likes_str} · 💬 {comments_str} · "
+            f"💾 {saves_str} · 📤 {shares_str}{other_actions}"
+        )
+
     notes = [
-        f"из них по метрикам аккаунта: ❤ {likes_str} · 💬 {comments_str} · 💾 {saves_str} · 📤 {shares_str}",
+        interaction_line,
         f"Форматы публикаций: {formats_line}",
         stories_footer,
-        ("" if stats_summary.get("totals_from_api") else
-         "ℹ️ Итоги API за период недоступны — охват и вовлечённые показаны суммой по дням (завышены из-за повторов)"),
-        _account_interaction_note(stats_summary),
-        _interaction_reconciliation_note(content_summary),
-        LEGEND_TITLE,
-        *LEGEND_ITEMS,
+        PLAIN_WORDS,
     ]
 
-    warnings_text = _warnings_block(
-        fetch_info.get("api_delay_dates", []), fetch_info.get("partial", False)
-    ).strip("\n")
+    warning_parts = []
+    api_delay_dates = fetch_info.get("api_delay_dates", [])
+    if api_delay_dates:
+        warning_parts.append(
+            f"⚠️ Данные за {', '.join(api_delay_dates)} могут быть неполными (задержка Instagram API ~24-48ч)"
+        )
+    if fetch_info.get("partial"):
+        warning_parts.append("⚠️ Часть данных не удалось получить из Instagram API — отчёт может быть неполным")
+    if not stats_summary.get("totals_from_api"):
+        warning_parts.append("⚠️ Итоги API недоступны — охват и вовлечённые показаны суммой по дням")
+    warning_parts.extend(_data_quality_warnings(data_quality, content_summary, stories_summary))
+    warnings_text = "\n\n".join(warning_parts)
 
     report_text = "\n\n".join(part for part in [
-        f"📱 @{account.username} — {account.name}\n📅 Период: {period_str}",
-        mono_block(tables),
+        mono_block([
+            f"📱 @{account.username} — {account.name}\n📅 Период: {period_str}",
+            *tables,
+        ]),
         "\n".join(note for note in notes if note),
         f"📋 Публикации\n{publications_text}",
-        f"🏆 Лучший пост (балл = (❤ + 2×💬 + 3×💾 + 4×📤) / охват × 100 — максимум за период)\n{best_info}",
+        f"🏆 Лучший пост (самый высокий отклик на 100 показов за период)\n{best_info}",
         warnings_text,
         f"🤖 AI-анализ\n{ai_analysis}",
     ] if part)
-    metric_gaps = [
-        f"{metric}: {missing} дн. без метрики"
-        for metric, missing in data_quality["metric_missing_days"].items()
-        if missing
-    ]
-    if metric_gaps or data_quality["legacy_unknown_days"]:
-        report_text += "\n\nℹ️ Полнота метрик: " + "; ".join(
-            metric_gaps or ["в новых ответах API известных пропусков нет"]
-        )
-        if data_quality["legacy_unknown_days"]:
-            report_text += (
-                f"; у {data_quality['legacy_unknown_days']} старых дн. "
-                "нет сведений о том, какие метрики вернул API"
-            )
-        if data_quality["invalid_metadata_days"]:
-            report_text += (
-                f"; у {data_quality['invalid_metadata_days']} дн. повреждены метаданные полноты"
-            )
-    if content_summary["partial_insights_posts"] or content_summary["legacy_unknown_insights"]:
-        report_text += (
-            f"\nℹ️ Insights публикаций: неполных — {content_summary['partial_insights_posts']}; "
-            f"собраны до внедрения учёта полноты — {content_summary['legacy_unknown_insights']}"
-        )
-    if stories_summary["partial_insights_stories"] or stories_summary["legacy_unknown_insights"]:
-        report_text += (
-            f"\nℹ️ Insights сторис: неполных — {stories_summary['partial_insights_stories']}; "
-            f"собраны до внедрения учёта полноты — {stories_summary['legacy_unknown_insights']} "
-            f"(данные реальные, полнота метрик документально не подтверждена)"
-        )
 
 
     charts = {}
@@ -617,9 +605,9 @@ async def generate_comparison_periods_report(
         d, pct = diff(v1, v2)
         if d is None:
             return cmp_row(label, "н/д", "н/д", "н/д")
-        fmt = (lambda v: f"{v:.{decimals}f}") if decimals else (lambda v: format_number(v))
+        fmt = (lambda v: f"{v:.{decimals}f}".replace(".", ",")) if decimals else (lambda v: format_number(v))
         sign = "+" if d >= 0 else ""
-        pct_str = f" ({sign}{pct:.1f}%)" if pct is not None else ""
+        pct_str = f" ({sign}{pct:.1f}%)".replace(".", ",") if pct is not None else ""
         return cmp_row(label, fmt(v1), fmt(v2), f"{sign}{fmt(d)}{pct_str}")
 
     divider = "─" * DIVIDER_WIDTH
@@ -658,12 +646,6 @@ async def generate_comparison_periods_report(
     ]
 
     lines.append("")
-    for label, content in ((p1_str, c1), (p2_str, c2)):
-        note = _interaction_reconciliation_note(content, label)
-        if note:
-            lines.append(note)
-    if c1.get("interaction_gap") or c2.get("interaction_gap"):
-        lines.append("")
     lines.append("Форматы контента:")
     for media_type in sorted(set(formats1) | set(formats2)):
         left = formats1.get(media_type, {})
@@ -716,8 +698,8 @@ async def generate_comparison_periods_report(
 
     if not s1.get("totals_from_api") or not s2.get("totals_from_api"):
         lines.append(
-            "ℹ️ Итоги API недоступны для одного из периодов — его показатели "
-            "показаны суммой по дням (завышены из-за повторов)"
+            "⚠️ Итоги API недоступны для одного из периодов — его показатели "
+            "показаны суммой по дням"
         )
     warnings_text = _warnings_block(api_delay_dates, partial).strip("\n")
     if warnings_text:

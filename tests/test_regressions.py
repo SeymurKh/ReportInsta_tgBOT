@@ -4,7 +4,7 @@ import asyncio
 from openpyxl import load_workbook
 
 from bot.helpers import build_excel_from_context, parse_period_input, send_long_text
-from reports.generator import _day_end, _interaction_reconciliation_note, resolve_period
+from reports.generator import _day_end, resolve_period
 
 
 def test_parse_period_rejects_future_date():
@@ -32,18 +32,13 @@ def test_day_end_is_available_for_digest_and_sync():
     assert _day_end(date(2026, 9, 23)) == datetime(2026, 9, 23, 23, 59, 59)
 
 
-def test_interaction_reconciliation_note_is_only_emitted_for_a_gap():
-    assert _interaction_reconciliation_note({"interaction_gap": 0}) == ""
+def test_interaction_reconciliation_notes_are_removed_with_their_functions():
+    """Service reconciliation notes were removed from the report — the module
+    must not expose them anymore."""
+    import reports.generator as generator_module
 
-    note = _interaction_reconciliation_note({
-        "component_interactions": 335,
-        "total_interactions": 375,
-        "interaction_gap": 40,
-    })
-    assert "335" in note
-    assert "375" in note
-    assert "+40" in note
-    assert "ER рассчитан по total_interactions" in note
+    assert not hasattr(generator_module, "_interaction_reconciliation_note")
+    assert not hasattr(generator_module, "_account_interaction_note")
 
 
 def test_empty_message_is_replaced_with_fallback():
@@ -161,7 +156,7 @@ def test_report_wording_reflects_metric_semantics():
     text = _mocked_report()["text"]
 
     assert "н/д%" not in text  # missing values never grow a percent suffix
-    assert kv_row(L_ACCOUNT_ER, "18.1%") in text  # 3024 / 16663
+    assert kv_row(L_ACCOUNT_ER, "18,1%") in text  # 3024 / 16663, decimal comma
     # complete per-post averages; the duplicated count row is gone
     assert kv_row(L_POST_COMMENTS, "3") in text
     assert kv_row(L_POST_SAVES, "4") in text
@@ -170,12 +165,23 @@ def test_report_wording_reflects_metric_semantics():
     # exit rate is backed by visible components
     assert kv_row(L_STORIES_EXITS, "3") in text
     assert kv_row(L_STORIES_SWIPE, "1") in text
-    assert kv_row(L_STORIES_EXIT, "4.0%") in text  # (3 + 1) / 100 views
-    # the best-post criterion is spelled out exactly
-    assert "балл = (❤ + 2×💬 + 3×💾 + 4×📤) / охват × 100" in text
+    assert kv_row(L_STORIES_EXIT, "4,0%") in text  # (3 + 1) / 100 views
+    # the best-post criterion is short; the formula lives in the code, not text
+    assert "самый высокий отклик на 100 показов за период" in text
+    assert "балл = " not in text
     # one-day period: no fake «7 дн. к 7 дн.» window claim
     assert kv_row(L_GROWTH_SPEED, "н/д") in text
     assert "Скорость роста (7 дн." not in text
+    # the composition line adds up to the «all interactions» total: 3024 - 2420
+    assert "прочие действия 604" in text
+    # header travels with the tables in one message
+    assert text.startswith("```\n📱 @demo — Demo")
+    # no service blocks at all
+    for service_phrase in (
+        "Сверка взаимодействий", "КАК ЧИТАТЬ", "документально не подтверждена",
+        "Полнота метрик", "внедрения учёта полноты",
+    ):
+        assert service_phrase not in text
 
 
 def test_report_warnings_appear_before_ai_analysis():
@@ -197,9 +203,11 @@ def test_missing_api_totals_are_disclosed_not_masked():
 
     text = _mocked_report(totals={})["text"]
 
-    assert "Итоги API за период недоступны" in text
+    assert "⚠️ Итоги API недоступны — охват и вовлечённые показаны суммой по дням" in text
     assert kv_row(L_ACCOUNT_ER, "н/д") in text
     assert "н/д%" not in text
+    # without API totals the composition line has nothing to decompose
+    assert "из них по метрикам аккаунта" not in text
 
 
 def test_comparison_excel_contains_comparison_sheet():

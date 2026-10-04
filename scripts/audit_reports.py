@@ -225,9 +225,8 @@ def _report_check_block(generated, account, independent, posts, stories):
                 else _latest_followers_fallback(account)
             ),
         }
-    from utils.formatters import format_number, format_pct
+    from utils.formatters import format_number, format_pct, format_rate
     from reports.generator import (
-        _account_interaction_note, _interaction_reconciliation_note,
         TYPE_EMOJI, TYPE_NAME, WEEKDAYS_RU,
     )
     from utils.timezones import app_date
@@ -239,9 +238,24 @@ def _report_check_block(generated, account, independent, posts, stories):
         SEC_CONTENT, SEC_STORIES, kv_row,
     )
     text = generated["text"]
-    expected_note = _interaction_reconciliation_note(actual_content)
-    checks["report_text_interaction_reconciliation"] = (
-        expected_note in text if expected_note else "Сверка взаимодействий публикаций" not in text
+    # The composition line must add up to the «all interactions» total without
+    # any service commentary; service notes must be gone from the report.
+    comp_keys = ("likes_total", "comments_total", "saves_total", "shares_total")
+    total_interactions = actual_stats.get("total_interactions_total")
+    if total_interactions is not None and all(actual_stats.get(k) is not None for k in comp_keys):
+        other_actions_gap = total_interactions - sum(actual_stats[k] for k in comp_keys)
+    else:
+        other_actions_gap = None
+    checks["report_text_other_actions"] = (
+        f"прочие действия {format_number(other_actions_gap)}" in text
+        if other_actions_gap and other_actions_gap > 0
+        else "прочие действия" not in text
+    )
+    checks["report_text_no_service_notes"] = (
+        "Сверка взаимодействий" not in text
+        and "КАК ЧИТАТЬ" not in text
+        and "документально не подтверждена" not in text
+        and "Полнота метрик" not in text
     )
     def value_str(value):
         # Mirrors reports.generator.metric_str: a real zero stays «0».
@@ -273,14 +287,10 @@ def _report_check_block(generated, account, independent, posts, stories):
         "average_saves": kv_row(L_POST_SAVES, str(actual_content["avg_saves"])),
         "average_shares": kv_row(L_POST_SHARES, str(actual_content["avg_shares"])),
         "average_reach": kv_row(L_POST_REACH, format_number(actual_content["avg_reach"])),
-        "engagement_rate": kv_row(L_POST_ER, f"{actual_content['engagement_rate']}%"),
+        "engagement_rate": kv_row(L_POST_ER, format_rate(actual_content["engagement_rate"])),
         "media_types": formats_line,
     }
     checks.update({f"report_text_{key}": marker in text for key, marker in report_markers.items()})
-    account_note = _account_interaction_note(actual_stats)
-    checks["report_text_account_reconciliation"] = (
-        account_note in text if account_note else "Сверка взаимодействий аккаунта" not in text
-    )
     from utils.formatters import MONTHS_RU
     post_markers = []
     for post in posts:

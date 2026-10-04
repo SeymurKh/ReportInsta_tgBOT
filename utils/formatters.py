@@ -14,7 +14,12 @@ def format_pct(n: float | None) -> str:
     if n is None:
         return "н/д"
     sign = "+" if n >= 0 else ""
-    return f"{sign}{n:.1f}%"
+    return f"{sign}{n:.1f}%".replace(".", ",")
+
+
+def format_rate(n: float) -> str:
+    """Percent without sign, Russian decimal comma: 11.3 -> «11,3%»."""
+    return f"{n:.1f}%".replace(".", ",")
 
 
 def format_date(d: date) -> str:

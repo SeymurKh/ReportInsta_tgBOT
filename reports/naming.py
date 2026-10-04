@@ -93,27 +93,12 @@ TREND_ADVERB = {
     "unknown": "н/д",
 }
 
-# ── Footnotes: compact legend + self-explanatory reconciliations ──
-LEGEND_TITLE = "📌 КАК ЧИТАТЬ"
-LEGEND_ITEMS = [
-    "• Охват и вовлечённые — уникальные аккаунты; просмотры — все показы, с повторами",
-    "• Прирост % — от базы на начало периода; прирост — по дневным данным",
-    "• ❤/💬/💾/📤 — метрики аккаунта; у публикаций — свои суммы",
-    "• День — UTC-день Instagram; даты публикаций и сторис — по вашему времени",
-    "• ER аккаунта = взаимодействия ÷ охват; ER публикаций — по total_interactions Insights",
-    "• Доля выходов = (выходы + уходы к другому аккаунту) ÷ просмотры сторис",
-    "• Средний дневной охват — среднее дневных значений",
-]
-NOTE_ACCOUNT_GAP = (
-    "ℹ️ Сверка взаимодействий аккаунта: {components} (❤💬💾📤) {sign}{gap} "
-    "({explanation}) = {total} — сходится."
+# ── The single explanatory line the report keeps ──
+PLAIN_WORDS = (
+    "💡 Простыми словами: охват — сколько людей увидели; вовлечённые — сколько "
+    "откликнулись; взаимодействия — сколько всего действий (с повторами); "
+    "просмотры профиля — заходы на страницу"
 )
-NOTE_POST_GAP = (
-    "ℹ️ Сверка взаимодействий публикаций{label}: {components} (❤💬💾📤) {sign}{gap} "
-    "({explanation}) = {total} — сходится. ER рассчитан по total_interactions."
-)
-GAP_EXTRA = "другие действия Instagram"
-GAP_RECOUNT = "пересчёт Instagram"
 
 
 def kv_row(label: str, value: str) -> str:
