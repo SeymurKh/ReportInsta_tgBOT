@@ -28,8 +28,8 @@ from reports.charts import (
     create_followers_chart, create_metrics_chart,
     create_stories_chart, create_comparison_chart,
 )
-from utils.formatters import format_number, format_pct, format_period, format_growth, format_rate, MONTHS_RU
-from utils.timezones import app_date, app_datetime, app_today
+from utils.formatters import format_number, format_pct, format_period, format_rate, format_decimal, MONTHS_RU
+from utils.timezones import app_date, app_datetime, app_today, day_is_unfinalized
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,15 @@ def _warnings_block(api_delay_dates: list[str], partial: bool) -> str:
     return ("\n\n" + "\n".join(parts)) if parts else ""
 
 
+def _young_days(date_from: date, date_to: date) -> list[date]:
+    """Days of the period Instagram still fills (younger than 24h past close)."""
+    return [
+        date_from + timedelta(days=offset)
+        for offset in range((date_to - date_from).days + 1)
+        if day_is_unfinalized(date_from + timedelta(days=offset))
+    ]
+
+
 _RU_METRIC_NAMES = {
     "follower_count": "прирост подписчиков",
     "followers_snapshot": "подписчики",
@@ -151,14 +160,24 @@ _RU_METRIC_NAMES = {
 }
 
 
-def _data_quality_warnings(data_quality: dict, content_summary: dict, stories_summary: dict) -> list[str]:
+def _data_quality_warnings(
+    data_quality: dict,
+    content_summary: dict,
+    stories_summary: dict,
+    young_days: list[date] | None = None,
+) -> list[str]:
     """Only real data problems, in plain words — service notes stay out of the report."""
     parts = []
-    missing = [
-        f"{_RU_METRIC_NAMES.get(name, name)} — {count} дн."
-        for name, count in data_quality["metric_missing_days"].items()
-        if count
-    ]
+    young_count = len(young_days or ())
+    missing = []
+    for name, count in data_quality["metric_missing_days"].items():
+        if not count:
+            continue
+        if name == "follower_count":
+            # Days Instagram still fills are explained by the ⏳ note instead.
+            count = max(count - young_count, 0)
+        if count:
+            missing.append(f"{_RU_METRIC_NAMES.get(name, name)} — {count} дн.")
     if missing:
         parts.append("⚠️ Нет данных: " + ", ".join(missing))
     if data_quality.get("invalid_metadata_days"):
@@ -433,7 +452,14 @@ async def generate_report(
         warning_parts.append("⚠️ Часть данных не удалось получить из Instagram API — отчёт может быть неполным")
     if not stats_summary.get("totals_from_api"):
         warning_parts.append("⚠️ Итоги API недоступны — охват и вовлечённые показаны суммой по дням")
-    warning_parts.extend(_data_quality_warnings(data_quality, content_summary, stories_summary))
+    young_days = _young_days(date_from, date_to)
+    if young_days:
+        warning_parts.append(
+            f"⏳ Данные за {format_period(min(young_days), max(young_days))} ещё уточняются Instagram"
+        )
+    warning_parts.extend(
+        _data_quality_warnings(data_quality, content_summary, stories_summary, young_days)
+    )
     warnings_text = "\n\n".join(warning_parts)
 
     report_text = "\n\n".join(part for part in [
@@ -605,23 +631,34 @@ async def generate_comparison_periods_report(
         d, pct = diff(v1, v2)
         if d is None:
             return cmp_row(label, "н/д", "н/д", "н/д")
-        fmt = (lambda v: f"{v:.{decimals}f}".replace(".", ",")) if decimals else (lambda v: format_number(v))
+        fmt = (lambda v: format_decimal(v, decimals)) if decimals else (lambda v: format_number(v))
         sign = "+" if d >= 0 else ""
-        pct_str = f" ({sign}{pct:.1f}%)".replace(".", ",") if pct is not None else ""
+        pct_str = f" ({sign}{format_decimal(pct)}%)" if pct is not None else ""
         return cmp_row(label, fmt(v1), fmt(v2), f"{sign}{fmt(d)}{pct_str}")
 
+    def cmp_rate_row(label, v1, v2):
+        """Rate-to-rate comparison: the delta lives in percentage points."""
+        d = round(v2 - v1, 1)
+        sign = "+" if d >= 0 else ""
+        return cmp_row(label, format_rate(v1), format_rate(v2), f"{sign}{format_decimal(d)} п.п.")
+
     divider = "─" * DIVIDER_WIDTH
+    activity_rows = [
+        cmp_line(L_FOLLOWERS_GROWTH, s1["followers_growth"], s2["followers_growth"]),
+        cmp_line(L_REACH, s1["reach_total"], s2["reach_total"]),
+        cmp_line(L_VIEWS, s1["views_total"], s2["views_total"]),
+        cmp_line(L_ENGAGED, s1["accounts_engaged_total"], s2["accounts_engaged_total"]),
+    ]
+    # Per-day rows only carry information for periods of different lengths; for
+    # equal lengths they are just the row above divided by the day count.
+    if period1_days != period2_days:
+        activity_rows.extend([
+            cmp_line(f"{L_REACH_PER_DAY} — нормализация", p1_reach_daily, p2_reach_daily, decimals=1),
+            cmp_line(f"{L_VIEWS_DAILY} — нормализация", p1_views_daily, p2_views_daily, decimals=1),
+            cmp_line(f"{L_ENGAGED_DAILY} — нормализация", p1_engaged_daily, p2_engaged_daily, decimals=1),
+        ])
     cmp_tables = [
-        "\n".join([
-            SEC_ACTIVITY, divider,
-            cmp_line(L_FOLLOWERS_GROWTH, s1["followers_growth"], s2["followers_growth"]),
-            cmp_line(L_REACH, s1["reach_total"], s2["reach_total"]),
-            cmp_line(L_REACH_PER_DAY, p1_reach_daily, p2_reach_daily, decimals=1),
-            cmp_line(L_VIEWS, s1["views_total"], s2["views_total"]),
-            cmp_line(L_VIEWS_DAILY, p1_views_daily, p2_views_daily, decimals=1),
-            cmp_line(L_ENGAGED, s1["accounts_engaged_total"], s2["accounts_engaged_total"]),
-            cmp_line(L_ENGAGED_DAILY, p1_engaged_daily, p2_engaged_daily, decimals=1),
-        ]),
+        "\n".join([SEC_ACTIVITY, divider, *activity_rows]),
         "\n".join([
             SEC_CONTENT, divider,
             cmp_line(L_POSTS, c1["total_posts"], c2["total_posts"]),
@@ -629,7 +666,7 @@ async def generate_comparison_periods_report(
             cmp_line(L_POST_COMMENTS_TOTAL, c1["total_comments"], c2["total_comments"]),
             cmp_line(L_POST_SAVES_TOTAL, c1["total_saves"], c2["total_saves"]),
             cmp_line(L_POST_SHARES_TOTAL, c1["total_shares"], c2["total_shares"]),
-            cmp_line(L_POST_ER, c1["engagement_rate"], c2["engagement_rate"], decimals=1),
+            cmp_rate_row(L_POST_ER, c1["engagement_rate"], c2["engagement_rate"]),
         ]),
         "\n".join([
             SEC_STORIES, divider,
@@ -639,9 +676,24 @@ async def generate_comparison_periods_report(
         ]),
     ]
 
+    if p1_available == period1_days and p2_available == period2_days:
+        data_line = (
+            f"Данные полные: {period1_days} из {period1_days} дней в обоих периодах"
+            if period1_days == period2_days
+            else (
+                f"Данные полные: период 1 — {period1_days} из {period1_days} дней; "
+                f"период 2 — {period2_days} из {period2_days} дней"
+            )
+        )
+    else:
+        data_line = (
+            f"Данные: период 1 — {p1_available} из {period1_days} дней; "
+            f"период 2 — {p2_available} из {period2_days} дней"
+        )
+
     lines = [
         f"📊 Сравнение периодов: {p1_str} → {p2_str}",
-        f"Данные: период 1 — {p1_available}/{period1_days} дн., период 2 — {p2_available}/{period2_days} дн.",
+        data_line,
         mono_block(cmp_tables),
     ]
 
@@ -651,16 +703,16 @@ async def generate_comparison_periods_report(
         left = formats1.get(media_type, {})
         right = formats2.get(media_type, {})
         lines.append(
-            f"• {media_type}: {left.get('posts', 0)} → {right.get('posts', 0)} постов; "
-            f"средний охват {left.get('reach_avg', 0)} → {right.get('reach_avg', 0)}; "
-            f"ER {left.get('engagement_rate', 0)}% → {right.get('engagement_rate', 0)}%"
+            f"• {TYPE_NAME.get(media_type, media_type)} — постов: {left.get('posts', 0)} → {right.get('posts', 0)}; "
+            f"средний охват: {format_number(left.get('reach_avg', 0))} → {format_number(right.get('reach_avg', 0))}; "
+            f"ER: {format_rate(left.get('engagement_rate', 0))} → {format_rate(right.get('engagement_rate', 0))}"
         )
     lines.extend(["", "Топ публикации:"])
     for label, posts in (("Период 1", top1), ("Период 2", top2)):
         best = posts[0] if posts else None
         lines.append(
-            f"• {label}: {best['media_type']}, {best['value']} взаимодействий, "
-            f"охват {best['reach']} — «{best['caption']}»"
+            f"• {label}: {TYPE_NAME.get(best['media_type'], best['media_type'])} — "
+            f"{best['value']} взаимодействий, охват {format_number(best['reach'])} — «{best['caption']}»"
             if best else f"• {label}: данных нет"
         )
 
@@ -696,6 +748,16 @@ async def generate_comparison_periods_report(
     else:
         ai_analysis = AI_UNAVAILABLE_TEXT
 
+    for period_label, period_from, period_to in (
+        ("Период 1", period1_from, period1_to),
+        ("Период 2", period2_from, period2_to),
+    ):
+        young = _young_days(period_from, period_to)
+        if young:
+            lines.append(
+                f"⏳ {period_label} включает {format_period(min(young), max(young))} — "
+                "цифры ещё уточняются Instagram"
+            )
     if not s1.get("totals_from_api") or not s2.get("totals_from_api"):
         lines.append(
             "⚠️ Итоги API недоступны для одного из периодов — его показатели "
@@ -766,11 +828,26 @@ async def generate_daily_digest(account, target_date: date | None = None) -> str
     current_followers, _ = _current_followers_snapshot(account, latest_stats)
     stories_summary = calculate_stories_summary(stories_list)
 
+    growth = summary["followers_growth"]
+    if growth is None:
+        history = await crud.get_all_daily_stats_dates(account.id)
+        deltas_supported = any((row.follower_count or 0) != 0 for row in history)
+        growth_part = (
+            "прирост ±0 подписчиков — уточняется"
+            if deltas_supported and day_is_unfinalized(yesterday)
+            else "прирост н/д"
+        )
+    elif growth == 0:
+        growth_part = "прирост ±0 подписчиков"
+    else:
+        sign = "+" if growth > 0 else ""
+        growth_part = f"прирост {sign}{format_number(growth)} подписчиков"
+
     return (
-        f"@{account.username}: {format_growth(summary['followers_growth'])} подписчиков "
+        f"@{account.username}: {growth_part} "
         f"(сейчас {format_number(current_followers) if current_followers is not None else 'н/д'}); "
         f"охват (уникальные) {format_number(summary['reach_total'])}; "
-        f"просмотры {format_number(summary['views_total'])}; "
+        f"просмотры контента {format_number(summary['views_total'])}; "
         f"публикаций {len(posts_list)}; "
         f"сторис {stories_summary['total_stories']} "
         f"(👁 {format_number(stories_summary['total_views'])})"

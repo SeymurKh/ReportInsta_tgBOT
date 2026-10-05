@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from config import settings
 from database import crud
 from instagram.client import InstagramClient, InstagramAPIError, utc_now_naive
+from utils.timezones import day_is_unfinalized
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +261,12 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
         for day_key, payload in sorted(day_payloads.items()):
             bucket = payload["bucket"]
             totals = payload["totals"]
-            present = [name for name, values in series.items() if values.get(day_key) is not None]
+            day_values = {name: values.get(day_key) for name, values in series.items()}
+            if not day_values.get("follower_count") and day_is_unfinalized(bucket.label, now):
+                # Instagram has not filled this day's follower delta yet: a zero
+                # here means «unknown», so it must not claim provenance.
+                day_values.pop("follower_count", None)
+            present = [name for name, value in day_values.items() if value is not None]
             present += [name for name in totals]
             await crud.save_daily_stats(
                 account_id=account.id,
@@ -268,8 +274,8 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
                 followers=None,  # set from a date-aligned follower snapshot
                 following=None,
                 media_count=None,
-                reach=series.get("reach", {}).get(day_key),
-                follower_count=series.get("follower_count", {}).get(day_key),
+                reach=day_values.get("reach"),
+                follower_count=day_values.get("follower_count"),
                 views=totals.get("views"),
                 accounts_engaged=totals.get("accounts_engaged"),
                 collected_at=now,

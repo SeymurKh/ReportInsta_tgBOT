@@ -37,9 +37,16 @@ def format_period(d_from: date, d_to: date) -> str:
 def format_growth(n: int | float | None) -> str:
     if n is None:
         return "н/д"
-    if n >= 0:
+    if n == 0:
+        return "±0"
+    if n > 0:
         return f"📈 +{format_number(n)}"
     return f"📉 {format_number(n)}"
+
+
+def format_decimal(n: float, digits: int = 1) -> str:
+    """Decimal with Russian comma and space thousands: 4869.1 -> «4 869,1»."""
+    return f"{n:,.{digits}f}".replace(",", " ").replace(".", ",")
 
 
 AI_CONTEXT_MAX_CHARS = 14000

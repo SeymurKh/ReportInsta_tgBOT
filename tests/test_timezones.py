@@ -21,6 +21,17 @@ def test_app_now_accepts_naive_utc_input():
         assert app_now(datetime(2026, 10, 1, 21, 30)).date() == date(2026, 10, 2)
 
 
+def test_day_is_unfinalized_tracks_instagram_fill_delay():
+    from datetime import date, datetime, timezone
+
+    from utils.timezones import day_is_unfinalized
+
+    now = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
+    assert day_is_unfinalized(date(2026, 10, 5), now) is True   # still open
+    assert day_is_unfinalized(date(2026, 10, 4), now) is True   # closed 12h ago
+    assert day_is_unfinalized(date(2026, 10, 3), now) is False  # closed 36h ago
+
+
 def test_app_datetime_converts_stored_utc_to_app_timezone():
     from datetime import datetime, timezone
 

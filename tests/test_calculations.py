@@ -101,6 +101,35 @@ def test_content_summary_empty():
     assert c["engagement_rate"] == 0.0
 
 
+def test_zero_follower_delta_on_unfinalized_day_is_not_a_fact():
+    """Regression: Instagram fills daily follower deltas with a 24-48h delay —
+    a zero read from a young day was trusted as a real «+0», producing false
+    «growth slowing» signals and wrong daily digests."""
+    from datetime import date, datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    from analytics.calculations import _follower_zero_is_provisional, metric_is_present
+
+    today = datetime.now(timezone.utc).date()
+    young_day = today - timedelta(days=1)  # closed less than 24h ago
+    old_day = date(2026, 9, 1)
+    provenance = '["follower_count", "reach"]'
+
+    young_zero = SimpleNamespace(date=young_day, follower_count=0, metrics_present=provenance)
+    assert not metric_is_present(young_zero, "follower_count")
+
+    young_nonzero = SimpleNamespace(date=young_day, follower_count=5, metrics_present=provenance)
+    assert metric_is_present(young_nonzero, "follower_count")
+
+    old_zero = SimpleNamespace(date=old_day, follower_count=0, metrics_present=provenance)
+    assert metric_is_present(old_zero, "follower_count")
+
+    # dict rows (audit harness style, ISO date strings) follow the same rule
+    assert _follower_zero_is_provisional({"date": young_day.isoformat(), "follower_count": 0})
+    assert not _follower_zero_is_provisional({"date": old_day.isoformat(), "follower_count": 0})
+    assert not _follower_zero_is_provisional({"date": young_day.isoformat(), "follower_count": 7})
+
+
 def test_story_and_post_summaries_expose_exit_components_and_post_averages():
     from types import SimpleNamespace
 

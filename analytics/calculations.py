@@ -1,4 +1,35 @@
 import json
+from datetime import date as _date
+
+from utils.timezones import day_is_unfinalized
+
+
+def _row_field(row, name, default=None):
+    value = getattr(row, name, None)
+    if value is not None:
+        return value
+    try:
+        return row[name]
+    except (TypeError, KeyError, IndexError):
+        return default
+
+
+def _follower_zero_is_provisional(row) -> bool:
+    """A zero follower delta from a day Instagram still fills means «unknown».
+
+    Instagram fills daily follower deltas with a 24-48h delay; a zero read
+    from a young day is «not counted yet», not a fact. Rows without a date
+    (tests, legacy objects) and non-zero deltas are never provisional.
+    """
+    if _row_field(row, "follower_count", 0):
+        return False
+    day = _row_field(row, "date")
+    if isinstance(day, str):
+        try:
+            day = _date.fromisoformat(day)
+        except ValueError:
+            return False
+    return day is not None and day_is_unfinalized(day)
 
 
 def metric_is_present(row, metric: str) -> bool:
@@ -12,7 +43,10 @@ def metric_is_present(row, metric: str) -> bool:
         values = json.loads(raw)
     except (TypeError, ValueError):
         return False
-    return isinstance(values, list) and metric in values
+    present = isinstance(values, list) and metric in values
+    if present and metric == "follower_count" and _follower_zero_is_provisional(row):
+        return False
+    return present
 
 
 def _metrics_present(row) -> set[str] | None:
@@ -189,7 +223,8 @@ def top_posts_by_metric(posts: list, metric: str = "total_interactions", limit: 
     ranked = sorted(posts, key=lambda post: getattr(post, metric, 0) or 0, reverse=True)
     return [{
         "media_type": post.media_type,
-        "caption": (post.caption or "").replace("\n", " ").strip()[:100],
+        "caption": (post.caption or "").replace("\n", " ").strip()[:100]
+        + ("…" if len((post.caption or "").strip()) > 100 else ""),
         "metric": metric,
         "value": getattr(post, metric, 0) or 0,
         "reach": post.reach or 0,

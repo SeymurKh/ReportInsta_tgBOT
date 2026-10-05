@@ -7,7 +7,7 @@ periods, calendars, daily digests) uses APP_TIMEZONE so the bot's "today" and
 Instagram (UTC) days.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from config import settings
@@ -47,3 +47,17 @@ def app_datetime(naive_utc: datetime) -> datetime:
 def app_date(naive_utc: datetime) -> date:
     """Calendar date of a stored UTC moment as the user sees it."""
     return app_datetime(naive_utc).date()
+
+
+def day_is_unfinalized(day: date, now: datetime | None = None) -> bool:
+    """True for a UTC day Instagram still fills with a 24-48h delay.
+
+    A metric read from such a day (especially a zero follower delta) means
+    «not known yet» rather than a fact; after ~24h past the day close zeros
+    are accepted as real values.
+    """
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    day_end = datetime(day.year, day.month, day.day, tzinfo=timezone.utc) + timedelta(days=1)
+    return current - day_end < timedelta(hours=24)

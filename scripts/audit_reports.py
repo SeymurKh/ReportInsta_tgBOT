@@ -44,9 +44,16 @@ def _namespace(row, date_fields=(), datetime_fields=(), bool_fields=()):
 
 def _present(row, metric):
     try:
-        return metric in json.loads(row["metrics_present"] or "[]")
+        present = metric in json.loads(row["metrics_present"] or "[]")
     except (TypeError, ValueError):
         return False
+    if present and metric == "follower_count":
+        # Mirror the production rule: a zero delta from a day Instagram still
+        # fills means «not known yet», not a real zero.
+        from analytics.calculations import _follower_zero_is_provisional
+
+        return not _follower_zero_is_provisional(row)
+    return present
 
 
 def _list_accounts(conn):
@@ -491,7 +498,13 @@ async def _audit_comparisons_for_account(conn, username):
         avail2 = context["period_days"]["available2"]
         checks["available_days"] = avail1 == independent_1["days"] and avail2 == independent_2["days"]
         text = generated["text"]
-        checks["text_has_headers"] = "📊 Сравнение периодов" in text and "Охват в день (итог ÷ дни)" in text
+        period1_days = (p1_to - p1_from).days + 1
+        period2_days = (p2_to - p2_from).days + 1
+        checks["text_has_headers"] = "📊 Сравнение периодов" in text and "Данные" in text
+        # normalization rows appear only for periods of different lengths
+        checks["text_normalization_rows"] = (
+            (" — нормализация" in text) == (period1_days != period2_days)
+        )
         checks["text_has_format_perf"] = "Форматы контента:" in text
         results.append({
             "account": username,

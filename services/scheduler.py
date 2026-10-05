@@ -33,6 +33,7 @@ async def stories_polling_loop(bot: Bot) -> None:
 async def daily_report_loop(bot: Bot) -> None:
     """Send one compact digest per calendar day in the configured timezone."""
     from reports.generator import generate_daily_digest
+    from utils.formatters import format_date
 
     app_timezone = ZoneInfo(settings.APP_TIMEZONE)
     logger.info(
@@ -54,12 +55,13 @@ async def daily_report_loop(bot: Bot) -> None:
                         await asyncio.sleep(60)
                         continue
 
-                    lines = ["🌅 Ежедневная сводка за вчера:\n"]
+                    target_date = now.date() - timedelta(days=1)
+                    lines = [f"🌅 Ежедневная сводка за вчера ({format_date(target_date)}):\n"]
                     for account in accounts:
                         try:
                             lines.append(await generate_daily_digest(
                                 account,
-                                target_date=now.date() - timedelta(days=1),
+                                target_date=target_date,
                             ))
                         except Exception as error:
                             logger.error(
@@ -70,6 +72,9 @@ async def daily_report_loop(bot: Bot) -> None:
                             )
                             lines.append(f"@{account.username}: ❌ ошибка сбора ({error})")
                     try:
+                        lines.append(
+                            "⏳ Цифры за вчера ещё уточняются Instagram (полные — к вечеру)"
+                        )
                         await bot.send_message(
                             settings.ADMIN_TELEGRAM_ID,
                             "\n\n".join(lines),
