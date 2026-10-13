@@ -56,6 +56,14 @@ L_POST_COMMENTS = "Комментарии на публикацию"
 L_POST_SAVES = "Сохранения на публикацию"
 L_POST_SHARES = "Репосты на публикацию"
 
+# ── Extended metrics (live-API probe 2026-10) ──
+L_FOLLOWS = "Подписки / отписки"
+L_AUDIENCE_SPLIT = "Подписчики / неподписчики (просмотры)"
+L_CONTACT_ACTIONS = "Кнопки связи"
+L_REPOSTS = "Репосты контента"
+L_REELS_WATCH = "Ср. время просмотра рилса"
+L_BEST_BY_FOLLOWS = "Больше всего подписчиков принёс"
+
 # ── Comparison extras ──
 L_VIEWS_DAILY = "Просмотры в день"
 L_ENGAGED_DAILY = "Вовлечённые в день (итог ÷ дни)"

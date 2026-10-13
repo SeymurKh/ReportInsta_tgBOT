@@ -396,3 +396,175 @@ def get_best_story(stories_list: list):
     if not stories_list:
         return None
     return max(stories_list, key=lambda s: (s.views, s.reach))
+
+
+# ────────────── Extended metrics (live-API probe 2026-10) ──────────────
+
+
+def _row_breakdowns(row) -> dict:
+    raw = getattr(row, "breakdowns", None)
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def aggregate_breakdowns(stats_list: list) -> dict:
+    """Sum JSON breakdown sets over daily rows.
+
+    Returns {metric: {breakdown: {"dim": value}}} — the client's per-day shape
+    summed over the period.
+    """
+    totals: dict = {}
+    for row in stats_list:
+        for metric, breakdowns in _row_breakdowns(row).items():
+            if not isinstance(breakdowns, dict):
+                continue
+            for breakdown, values in breakdowns.items():
+                if not isinstance(values, dict):
+                    continue
+                bucket = totals.setdefault(metric, {}).setdefault(breakdown, {})
+                for key, value in values.items():
+                    if isinstance(value, (int, float)):
+                        bucket[key] = bucket.get(key, 0) + value
+    return totals
+
+
+def audience_split(breakdowns: dict, metric: str = "views") -> dict | None:
+    """Follower / non-follower split for a metric.
+
+    Returns {"followers": n, "non_followers": n} or None when the breakdown was
+    never collected in the period. Labels are matched case-insensitively.
+    """
+    entry = breakdowns.get(metric, {}).get("follow_type")
+    if not isinstance(entry, dict) or not entry:
+        return None
+    followers = non_followers = 0
+    seen = False
+    for key, value in entry.items():
+        if not isinstance(value, (int, float)):
+            continue
+        upper = str(key).upper()
+        if upper in {"NON_FOLLOWER", "NON_FOLLOWERS"}:
+            non_followers += value
+            seen = True
+        elif upper in {"FOLLOWER", "FOLLOWERS"}:
+            followers += value
+            seen = True
+    if not seen:
+        return None
+    return {"followers": followers, "non_followers": non_followers}
+
+
+def contact_actions(stats_list: list) -> dict | None:
+    """Aggregated contact-button taps with presence semantics.
+
+    Returns {"total": n, "buttons": {label: n}} or None when the metric was
+    never measured in the period (fresh zero != real zero).
+    """
+    measured = [row for row in stats_list if metric_is_present(row, "profile_links_taps")]
+    entry = aggregate_breakdowns(stats_list).get("profile_links_taps", {}).get(
+        "contact_button_type"
+    )
+    if not measured and not entry:
+        return None
+    total = sum(getattr(row, "profile_links_taps", 0) or 0 for row in measured)
+    buttons = {
+        key: value for key, value in (entry or {}).items()
+        if isinstance(value, (int, float)) and value
+    }
+    return {"total": total, "buttons": buttons}
+
+
+def follow_activity(stats_list: list) -> dict | None:
+    """Period follows/unfollows; None when never measured."""
+    measured = [row for row in stats_list if metric_is_present(row, "follows")]
+    if not measured:
+        return None
+    return {
+        "follows": sum(getattr(row, "follows", 0) or 0 for row in measured),
+        "unfollows": sum(getattr(row, "unfollows", 0) or 0 for row in measured),
+    }
+
+
+def reposts_total(stats_list: list) -> int | None:
+    """Period reposts; None when never measured."""
+    measured = [row for row in stats_list if metric_is_present(row, "reposts")]
+    if not measured:
+        return None
+    return sum(getattr(row, "reposts", 0) or 0 for row in measured)
+
+
+def best_post_by_followers(posts: list):
+    """Post that brought the most new followers (only where measured).
+
+    Reels never report follows, so the winner is the best of the feed posts
+    that actually carry the metric.
+    """
+    measured = [p for p in posts if (getattr(p, "follows", None) or 0) > 0]
+    if not measured:
+        return None
+    return max(measured, key=lambda p: p.follows)
+
+
+def reels_watch_summary(posts: list) -> dict | None:
+    """Average watch time across the reels that report it (milliseconds)."""
+    measured = [p for p in posts if getattr(p, "avg_watch_time", None) is not None]
+    if not measured:
+        return None
+    return {
+        "reels_measured": len(measured),
+        "avg_watch_time": round(sum(p.avg_watch_time for p in measured) / len(measured)),
+        "total_watch_time": sum((getattr(p, "total_watch_time", 0) or 0) for p in measured),
+    }
+
+
+def summarize_audience_snapshots(snapshots: list) -> dict:
+    """Compact demographics: {scope: {dimension: [(key, value), ...]}} top-5."""
+    result: dict = {}
+    for snap in snapshots:
+        try:
+            payload = json.loads(snap.payload)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, list):
+            continue
+        items = sorted(
+            (item for item in payload
+             if isinstance(item, dict) and isinstance(item.get("value"), (int, float)) and item["value"]),
+            key=lambda item: item["value"],
+            reverse=True,
+        )[:5]
+        if items:
+            result.setdefault(snap.scope, {})[snap.dimension] = [
+                (str(item.get("key", "")), item["value"]) for item in items
+            ]
+    return result
+
+
+def online_followers_peak(stats_list: list) -> dict | None:
+    """Weekdays with the highest average online-followers count.
+
+    online_followers is a daily series (the API has no hourly breakdown), so
+    this supports «best day to post» — not «best hour».
+    """
+    by_weekday: dict[int, list[int]] = {}
+    for row in stats_list:
+        if not metric_is_present(row, "online_followers"):
+            continue
+        value = getattr(row, "online_followers", None)
+        if value is None:
+            continue
+        by_weekday.setdefault(row.date.weekday(), []).append(value)
+    if not by_weekday:
+        return None
+    averages = {
+        weekday: round(sum(values) / len(values))
+        for weekday, values in by_weekday.items()
+    }
+    best = max(averages.values())
+    best_weekdays = sorted(w for w, avg in averages.items() if avg >= best * 0.95)
+    return {"averages": averages, "best_weekdays": best_weekdays}

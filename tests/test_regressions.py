@@ -167,7 +167,7 @@ def test_report_wording_reflects_metric_semantics():
     assert kv_row(L_STORIES_SWIPE, "1") in text
     assert kv_row(L_STORIES_EXIT, "4,0%") in text  # (3 + 1) / 100 views
     # the best-post criterion is short; the formula lives in the code, not text
-    assert "самый высокий отклик на 100 показов за период" in text
+    assert "самый высокий отклик на 100 охваченных за период" in text
     assert "балл = " not in text
     # one-day period: no fake «7 дн. к 7 дн.» window claim
     assert kv_row(L_GROWTH_SPEED, "н/д") in text

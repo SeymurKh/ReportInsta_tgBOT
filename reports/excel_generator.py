@@ -113,6 +113,7 @@ def generate_excel_report(
     publications, ai_analysis, dialogue_history=None,
     stories_summary=None, stories_list=None, comparison_periods=None,
     comparison_period_days=None, comparison_formats=None, comparison_top_posts=None,
+    audience_data=None,
 ) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -288,6 +289,74 @@ def generate_excel_report(
             _set_numeric_format(ws_s, range(3, 13), header_row + 1, last_story_row)
             _add_table(ws_s, f"A{header_row}:L{last_story_row}", "Stories")
         ws_s.freeze_panes = f"A{header_row + 1}"
+
+    # Audience (extended metrics, probe 2026-10): split, follows, contact
+    # buttons and demographics snapshots — only blocks with real data.
+    if audience_data:
+        ws_a = wb.create_sheet("Аудитория")
+        ws_a.sheet_properties.tabColor = "70AD47"
+        _title(ws_a, "Аудитория", f"@{account_username}  •  {period_str}", 3)
+        ws_a.column_dimensions["A"].width = 30
+        ws_a.column_dimensions["B"].width = 18
+        ws_a.column_dimensions["C"].width = 14
+        audience_row = 4
+
+        def _audience_section(title):
+            nonlocal audience_row
+            ws_a.merge_cells(
+                start_row=audience_row, start_column=1,
+                end_row=audience_row, end_column=3,
+            )
+            ws_a.cell(row=audience_row, column=1, value=title)
+            _ss(ws_a.cell(row=audience_row, column=1))
+            for col in (1, 2, 3):
+                ws_a.cell(row=audience_row, column=col).border = THIN_BORDER
+            audience_row += 1
+
+        def _audience_row(label, value, pct=None):
+            nonlocal audience_row
+            ws_a.cell(row=audience_row, column=1, value=label)
+            ws_a.cell(row=audience_row, column=2, value=value)
+            _style_body(ws_a, audience_row, audience_row, 1, 3)
+            ws_a.cell(row=audience_row, column=2).number_format = "#,##0"
+            if pct is not None:
+                ws_a.cell(row=audience_row, column=3, value=_pct(pct))
+                ws_a.cell(row=audience_row, column=3).number_format = PERCENT_FORMAT
+            audience_row += 1
+
+        split = audience_data.get("audience_split")
+        if split and (split["followers"] + split["non_followers"]) > 0:
+            _audience_section("Просмотры по типу аудитории")
+            split_total = split["followers"] + split["non_followers"]
+            _audience_row("Подписчики", split["followers"], split["followers"] / split_total * 100)
+            _audience_row("Неподписчики", split["non_followers"], split["non_followers"] / split_total * 100)
+        follows = audience_data.get("follow_activity")
+        if follows:
+            _audience_section("Подписки и отписки за период")
+            _audience_row("Подписки", follows["follows"])
+            _audience_row("Отписки", follows["unfollows"])
+        contacts = audience_data.get("contact_actions")
+        if contacts and contacts.get("total"):
+            _audience_section("Кнопки связи (нажатия за период)")
+            _audience_row("Всего", contacts["total"])
+            for key, value in sorted(contacts["buttons"].items(), key=lambda kv: -kv[1]):
+                _audience_row(str(key), value)
+        scope_names = {
+            "follower": "Подписчики",
+            "engaged_audience": "Вовлечённая аудитория",
+            "reached_audience": "Охваченная аудитория",
+        }
+        dimension_names = {
+            "age_gender": "Возраст и пол", "country": "Страны", "city": "Города",
+        }
+        for scope, dimensions in (audience_data.get("demographics") or {}).items():
+            for dimension, items in dimensions.items():
+                _audience_section(
+                    f"{scope_names.get(scope, scope)} — {dimension_names.get(dimension, dimension)}"
+                )
+                for key, value in items:
+                    _audience_row(str(key), value)
+        ws_a.freeze_panes = "A4"
 
     # AI dialogue.
     if dialogue_history:

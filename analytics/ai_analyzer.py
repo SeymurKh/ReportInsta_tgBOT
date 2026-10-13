@@ -28,6 +28,10 @@ REPORT_SYSTEM_PROMPT += (
     "рекомендаций. Даты публикаций бери только из поля date календаря, "
     "никогда из текста капшена."
 )
+REPORT_SYSTEM_PROMPT += (
+    " Проверяй согласование числительных с существительными: «22 подписчика», "
+    "«52 подписчика», «62 новых подписчика», «96 подписчиков», «+1 подписчик»."
+)
 
 CHAT_SYSTEM_PROMPT = (
     "Ты помощник по SMM-аналитике. Отвечай на русском, кратко и по существу. "
@@ -85,7 +89,7 @@ class AIAnalyzer:
     async def analyze_account(
         self, period: str, stats_summary: dict, content_summary: dict,
         best_post_info: str, trend: str, stories_summary: dict | None = None,
-        data_quality: dict | None = None,
+        data_quality: dict | None = None, extended: dict | None = None,
     ) -> str:
         stories_line = "Сторис: нет данных"
         if stories_summary and stories_summary.get("total_stories"):
@@ -118,6 +122,46 @@ class AIAnalyzer:
                     f"; неполные Insights сторис: {stories_summary.get('partial_insights_stories', 0)}; "
                     f"собраны до внедрения учёта полноты: {stories_summary.get('legacy_unknown_insights', 0)}"
                 )
+        extended_line = ""
+        if extended:
+            parts = []
+            split = extended.get("audience_split")
+            if split and (split["followers"] + split["non_followers"]) > 0:
+                total = split["followers"] + split["non_followers"]
+                parts.append(
+                    f"просмотры: подписчики {split['followers'] / total * 100:.1f}%, "
+                    f"неподписчики {split['non_followers'] / total * 100:.1f}%"
+                )
+            follows = extended.get("follow_activity")
+            if follows:
+                parts.append(f"подписки {follows['follows']}, отписки {follows['unfollows']}")
+            contacts = extended.get("contact_actions")
+            if contacts and contacts.get("total"):
+                buttons = ", ".join(
+                    f"{key} {value}"
+                    for key, value in sorted(contacts["buttons"].items(), key=lambda kv: -kv[1])
+                )
+                parts.append(
+                    f"кнопки связи: всего {contacts['total']}"
+                    + (f" ({buttons})" if buttons else "")
+                )
+            reposts = extended.get("reposts")
+            if reposts:
+                parts.append(f"репосты контента {reposts}")
+            watch = extended.get("reels_watch")
+            if watch:
+                parts.append(
+                    f"среднее время просмотра рилса {watch['avg_watch_time'] / 1000:.1f} сек "
+                    f"по {watch['reels_measured']} рилсам"
+                )
+            best_follows = extended.get("best_follows_post")
+            if best_follows:
+                parts.append(
+                    f"больше всего подписчиков принёс пост «{best_follows['caption']}» "
+                    f"(+{best_follows['follows']})"
+                )
+            if parts:
+                extended_line = "\n- Расширенные метрики: " + "; ".join(parts) + "."
         current_followers = stats_summary.get("followers_current")
         follower_growth = stats_summary.get("followers_growth")
         follower_growth_pct = stats_summary.get("followers_growth_pct")
@@ -130,7 +174,7 @@ class AIAnalyzer:
 - Средние значения на публикацию: лайки {content_summary.get('avg_likes', 0)}; комментарии {content_summary.get('avg_comments', 0)}; сохранения {content_summary.get('avg_saves', 0)}; репосты {content_summary.get('avg_shares', 0)}; охват {content_summary.get('avg_reach', 0)}; ER публикаций {content_summary.get('engagement_rate', 0)}% (total_interactions Insights {content_summary.get('total_interactions', 'н/д')} / суммарный охват публикаций {content_summary.get('total_reach', 'н/д')})
 - Сверка взаимодействий: сумма ❤/💬/💾/📤 {content_summary.get('component_interactions', 'н/д')} + другие действия Instagram = total_interactions {content_summary.get('total_interactions', 'н/д')}. Это норма расширенного счётчика Instagram: не считай расхождение проблемой и не предлагай его исправлять.
 - {stories_line}
-- Качество данных:{quality_line or ' не указано'}
+- Качество данных:{quality_line or ' не указано'}{extended_line}
 - Лучший пост (по баллу (лайки + 2×комментарии + 3×сохранения + 4×репосты) / охват × 100; он не обязательно имеет максимальный охват): {best_post_info}
 - Скорость роста сейчас (сравнение соседних окон максимум по 7 дней, не прирост за весь период): {trend}
 

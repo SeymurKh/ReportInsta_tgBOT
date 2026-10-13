@@ -303,3 +303,71 @@ def test_corrupt_metric_metadata_is_reported_as_unknown_not_crashed():
     assert quality["legacy_unknown_days"] == 1
     assert quality["invalid_metadata_days"] == 1
     assert quality["complete"] is False
+
+
+def test_extended_metric_aggregates_respect_presence_and_labels():
+    from types import SimpleNamespace
+    import json as _json
+    from analytics.calculations import (
+        aggregate_breakdowns, audience_split, contact_actions, follow_activity,
+        reposts_total, best_post_by_followers, reels_watch_summary,
+        online_followers_peak, summarize_audience_snapshots,
+    )
+
+    measured = SimpleNamespace(
+        date=date(2026, 10, 1),
+        metrics_present=_json.dumps([
+            "profile_links_taps", "follows", "unfollows", "reposts", "online_followers",
+        ]),
+        profile_links_taps=9, follows=5, unfollows=2, reposts=3, online_followers=1500,
+        breakdowns=_json.dumps({
+            "views": {"follow_type": {"FOLLOWER": 30, "NON_FOLLOWER": 70}},
+            "profile_links_taps": {"contact_button_type": {"DIRECTION": 6, "CALL": 3}},
+            "follows_and_unfollows": {"follow_type": {"FOLLOWS": 5, "UNFOLLOWS": 2}},
+        }),
+    )
+    unmeasured = SimpleNamespace(
+        date=date(2026, 10, 2),
+        metrics_present=_json.dumps(["reach"]),
+        profile_links_taps=0, follows=0, unfollows=0, reposts=0, online_followers=0,
+        breakdowns=None,
+    )
+
+    breakdowns = aggregate_breakdowns([measured, unmeasured])
+    assert audience_split(breakdowns) == {"followers": 30, "non_followers": 70}
+    assert audience_split({}, "reach") is None
+
+    assert contact_actions([measured, unmeasured]) == {
+        "total": 9, "buttons": {"DIRECTION": 6, "CALL": 3},
+    }
+    # Unmeasured-only periods must report «unknown», never a fresh zero.
+    assert contact_actions([unmeasured]) is None
+    assert follow_activity([unmeasured]) is None
+    assert reposts_total([unmeasured]) is None
+
+    assert follow_activity([measured, unmeasured]) == {"follows": 5, "unfollows": 2}
+    assert reposts_total([measured, unmeasured]) == 3
+
+    posts = [
+        SimpleNamespace(caption="a", follows=4, avg_watch_time=5000, total_watch_time=100),
+        SimpleNamespace(caption="b", follows=7, avg_watch_time=None, total_watch_time=None),
+        SimpleNamespace(caption="c", follows=None, avg_watch_time=2000, total_watch_time=50),
+    ]
+    assert best_post_by_followers(posts).caption == "b"
+    assert best_post_by_followers([posts[2]]) is None
+    assert reels_watch_summary(posts) == {
+        "reels_measured": 2, "avg_watch_time": 3500, "total_watch_time": 150,
+    }
+
+    # 2026-10-01 is a Thursday (weekday 3)
+    peak = online_followers_peak([measured, unmeasured])
+    assert peak["best_weekdays"] == [3]
+
+    snap = SimpleNamespace(
+        scope="follower", dimension="country",
+        payload=_json.dumps([
+            {"key": "AZ", "value": 40}, {"key": "RU", "value": 10}, {"key": "US", "value": 0},
+        ]),
+    )
+    summary = summarize_audience_snapshots([snap])
+    assert summary["follower"]["country"] == [("AZ", 40), ("RU", 10)]

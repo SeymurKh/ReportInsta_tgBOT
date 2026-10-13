@@ -9,6 +9,9 @@ from analytics.calculations import (
     calculate_period_summary, calculate_content_summary, calculate_stories_summary,
     get_best_post, get_best_story, detect_trend, top_posts_by_metric,
     compare_content_formats, daily_peaks, data_quality_summary, metric_is_present,
+    aggregate_breakdowns, audience_split, contact_actions, follow_activity,
+    reposts_total, best_post_by_followers, reels_watch_summary,
+    summarize_audience_snapshots,
 )
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from reports.naming import (
@@ -21,6 +24,8 @@ from reports.naming import (
     L_STORIES_FOLLOWS, L_STORIES_FORWARD, L_STORIES_PROFILE, L_STORIES_REACH,
     L_STORIES_REPLIES, L_STORIES_SHARES, L_STORIES_SWIPE, L_STORIES_VIEWS,
     L_GROWTH_SPEED, L_VIEWS, L_VIEWS_DAILY, PLAIN_WORDS,
+    L_FOLLOWS, L_AUDIENCE_SPLIT, L_CONTACT_ACTIONS, L_REPOSTS,
+    L_REELS_WATCH, L_BEST_BY_FOLLOWS,
     SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_ADVERB,
     DIVIDER_WIDTH, cmp_row, growth_speed_label, mono_block, table_section,
 )
@@ -36,6 +41,12 @@ logger = logging.getLogger(__name__)
 TYPE_EMOJI = {"IMAGE": "📷", "VIDEO": "🎬", "CAROUSEL_ALBUM": "📸", "REELS": "🎬"}
 TYPE_NAME = {"IMAGE": "Фото", "VIDEO": "Видео", "CAROUSEL_ALBUM": "Карусель", "REELS": "Reels"}
 WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+# contact_button_type labels (probe 2026-10) — matched case-insensitively
+CONTACT_BUTTON_NAMES = {
+    "DIRECTION": "адрес", "CALL": "звонок", "EMAIL": "почта",
+    "TEXT": "SMS", "BOOK_NOW": "бронь", "INSTANT_EXPERIENCE": "ссылка",
+    "UNDEFINED": "прочее", "BIO_LINK_CLICKED": "ссылка в шапке",
+}
 
 
 def _day_end(value: date) -> datetime:
@@ -267,6 +278,23 @@ async def generate_report(
     stats_summary = _merge_period_totals(stats_summary, totals)
     content_summary = calculate_content_summary(posts_list)
     stories_summary = calculate_stories_summary(stories_list)
+
+    # Extended facts (probe 2026-10): audience split, contact buttons, follows,
+    # reposts and reels watch time — all optional, only shown when measured.
+    extended_breakdowns = aggregate_breakdowns(stats_list)
+    audience = audience_split(extended_breakdowns, "views")
+    contacts = contact_actions(stats_list)
+    follows_activity = follow_activity(stats_list)
+    reposts = reposts_total(stats_list)
+    watch = reels_watch_summary(posts_list)
+    best_follows_post = best_post_by_followers(posts_list)
+    try:
+        demographics = summarize_audience_snapshots(
+            await crud.get_audience_snapshots(account.id, as_of=date_to)
+        )
+    except Exception as error:  # table may be missing on legacy DBs — never crash a report
+        logger.warning("Audience snapshots unavailable for @%s: %s", account.username, error)
+        demographics = {}
     data_quality = data_quality_summary(
         stats_list, expected_days=(date_to - date_from).days + 1
     )
@@ -298,6 +326,14 @@ async def generate_report(
             f"{best.permalink}"
         )
     trend = detect_trend(stats_list, "follower_count")
+
+    best_follows_line = ""
+    if best_follows_post:
+        bp_caption = best_follows_post.caption[:60].replace("\n", " ").strip()
+        best_follows_line = (
+            f"🌱 {L_BEST_BY_FOLLOWS}: «{bp_caption}» "
+            f"(+{format_number(best_follows_post.follows)})"
+        )
     period_str = format_period(date_from, date_to)
 
     # Growth speed: average daily follower gain of the last 7 days vs the
@@ -323,6 +359,20 @@ async def generate_report(
             period_str, stats_summary, content_summary, best_info, growth_speed_val,
             stories_summary=stories_summary,
             data_quality=data_quality,
+            extended={
+                "audience_split": audience,
+                "contact_actions": contacts,
+                "follow_activity": follows_activity,
+                "reposts": reposts,
+                "reels_watch": watch,
+                "best_follows_post": (
+                    {
+                        "caption": best_follows_post.caption[:80].replace("\n", " ").strip(),
+                        "follows": best_follows_post.follows,
+                    }
+                    if best_follows_post else None
+                ),
+            },
         )
     else:
         ai_analysis = AI_UNAVAILABLE_TEXT
@@ -373,29 +423,64 @@ async def generate_report(
         growth_sign = "+" if growth >= 0 else ""
         growth_val = f"{growth_sign}{format_number(growth)} ({format_pct(stats_summary['followers_growth_pct'])})"
 
+    followers_rows = [
+        (L_FOLLOWERS_NOW, format_number(current_followers) if current_followers is not None else "н/д"),
+        (L_FOLLOWERS_GROWTH, growth_val),
+        (growth_speed_row_label, growth_speed_val),
+    ]
+    if follows_activity:
+        followers_rows.append((
+            L_FOLLOWS,
+            f"+{format_number(follows_activity['follows'])} / "
+            f"−{format_number(follows_activity['unfollows'])}",
+        ))
+
+    activity_rows = [
+        (L_REACH, reach_str),
+        (L_VIEWS, views_str),
+        (L_ENGAGED, accounts_engaged_str),
+        (L_INTERACTIONS, interactions_str),
+        (L_PROFILE_VIEWS, profile_views_str),
+        (L_ACCOUNT_ER, account_er_str),
+        (L_REACH_DAILY, format_number(stats_summary["reach_avg_daily"])),
+    ]
+    if audience and (audience["followers"] + audience["non_followers"]) > 0:
+        split_total = audience["followers"] + audience["non_followers"]
+        activity_rows.append((
+            L_AUDIENCE_SPLIT,
+            f"{format_rate(audience['followers'] / split_total * 100)} / "
+            f"{format_rate(audience['non_followers'] / split_total * 100)}",
+        ))
+    if contacts and contacts["total"]:
+        buttons = " · ".join(
+            f"{CONTACT_BUTTON_NAMES.get(str(key).upper(), key)} {format_number(value)}"
+            for key, value in sorted(contacts["buttons"].items(), key=lambda kv: -kv[1])
+        )
+        activity_rows.append((
+            L_CONTACT_ACTIONS,
+            f"{format_number(contacts['total'])}" + (f" ({buttons})" if buttons else ""),
+        ))
+    if reposts:
+        activity_rows.append((L_REPOSTS, format_number(reposts)))
+
+    content_rows = [
+        (L_POST_LIKES, str(content_summary["avg_likes"])),
+        (L_POST_COMMENTS, str(content_summary["avg_comments"])),
+        (L_POST_SAVES, str(content_summary["avg_saves"])),
+        (L_POST_SHARES, str(content_summary["avg_shares"])),
+        (L_POST_REACH, format_number(content_summary["avg_reach"])),
+        (L_POST_ER, format_rate(content_summary["engagement_rate"])),
+    ]
+    if watch:
+        content_rows.append((
+            L_REELS_WATCH,
+            f"{watch['avg_watch_time'] / 1000:.1f}".replace(".", ",") + " сек",
+        ))
+
     tables = [
-        table_section(SEC_FOLLOWERS, [
-            (L_FOLLOWERS_NOW, format_number(current_followers) if current_followers is not None else "н/д"),
-            (L_FOLLOWERS_GROWTH, growth_val),
-            (growth_speed_row_label, growth_speed_val),
-        ]),
-        table_section(SEC_ACTIVITY, [
-            (L_REACH, reach_str),
-            (L_VIEWS, views_str),
-            (L_ENGAGED, accounts_engaged_str),
-            (L_INTERACTIONS, interactions_str),
-            (L_PROFILE_VIEWS, profile_views_str),
-            (L_ACCOUNT_ER, account_er_str),
-            (L_REACH_DAILY, format_number(stats_summary["reach_avg_daily"])),
-        ]),
-        table_section(f"{SEC_CONTENT} ({content_summary['total_posts']})", [
-            (L_POST_LIKES, str(content_summary["avg_likes"])),
-            (L_POST_COMMENTS, str(content_summary["avg_comments"])),
-            (L_POST_SAVES, str(content_summary["avg_saves"])),
-            (L_POST_SHARES, str(content_summary["avg_shares"])),
-            (L_POST_REACH, format_number(content_summary["avg_reach"])),
-            (L_POST_ER, format_rate(content_summary["engagement_rate"])),
-        ]),
+        table_section(SEC_FOLLOWERS, followers_rows),
+        table_section(SEC_ACTIVITY, activity_rows),
+        table_section(f"{SEC_CONTENT} ({content_summary['total_posts']})", content_rows),
     ]
     if stories_summary.get("total_stories"):
         tables.append(table_section(
@@ -469,7 +554,8 @@ async def generate_report(
         ]),
         "\n".join(note for note in notes if note),
         f"📋 Публикации\n{publications_text}",
-        f"🏆 Лучший пост (самый высокий отклик на 100 показов за период)\n{best_info}",
+        f"🏆 Лучший пост (самый высокий отклик на 100 охваченных за период)\n{best_info}",
+        best_follows_line,
         warnings_text,
         f"🤖 AI-анализ\n{ai_analysis}",
     ] if part)
@@ -513,6 +599,22 @@ async def generate_report(
         } for p in posts_by_date[day_key]]
         publications_data.append({"date": day_key, "posts": day_posts})
 
+    audience_context = {}
+    if audience:
+        audience_context["audience_split"] = audience
+    if follows_activity:
+        audience_context["follow_activity"] = follows_activity
+    if contacts and contacts.get("total"):
+        audience_context["contact_actions"] = {
+            "total": contacts["total"],
+            "buttons": {
+                CONTACT_BUTTON_NAMES.get(str(key).upper(), key): value
+                for key, value in contacts["buttons"].items()
+            },
+        }
+    if demographics:
+        audience_context["demographics"] = demographics
+
     context = {
         "account": f"@{account.username} — {account.name}",
         "account_username": account.username,
@@ -532,6 +634,7 @@ async def generate_report(
         "daily_peaks": daily_peaks(stats_list),
         "data_quality": data_quality,
         "ai_analysis": ai_analysis,
+        "audience": audience_context or None,
     }
 
     return {"text": report_text, "charts": charts, "context": context}
