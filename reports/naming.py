@@ -58,6 +58,8 @@ L_POST_SHARES = "Репосты на публикацию"
 
 # ── Extended metrics (live-API probe 2026-10) ──
 L_FOLLOWS = "Подписки / отписки"
+L_FOLLOWS_ONLY = "Подписки"
+L_UNFOLLOWS_ONLY = "Отписки"
 L_AUDIENCE_SPLIT = "Подписчики / неподписчики (просмотры)"
 L_CONTACT_ACTIONS = "Кнопки связи"
 L_REPOSTS = "Репосты контента"

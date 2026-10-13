@@ -24,7 +24,8 @@ from reports.naming import (
     L_STORIES_FOLLOWS, L_STORIES_FORWARD, L_STORIES_PROFILE, L_STORIES_REACH,
     L_STORIES_REPLIES, L_STORIES_SHARES, L_STORIES_SWIPE, L_STORIES_VIEWS,
     L_GROWTH_SPEED, L_VIEWS, L_VIEWS_DAILY, PLAIN_WORDS,
-    L_FOLLOWS, L_AUDIENCE_SPLIT, L_CONTACT_ACTIONS, L_REPOSTS,
+    L_FOLLOWS, L_FOLLOWS_ONLY, L_UNFOLLOWS_ONLY,
+    L_AUDIENCE_SPLIT, L_CONTACT_ACTIONS, L_REPOSTS,
     L_REELS_WATCH, L_BEST_BY_FOLLOWS, CONTACT_BUTTON_NAMES,
     SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_ADVERB,
     DIVIDER_WIDTH, cmp_row, growth_speed_label, mono_block, table_section,
@@ -747,16 +748,41 @@ async def generate_comparison_periods_report(
 
     def cmp_rate_row(label, v1, v2):
         """Rate-to-rate comparison: the delta lives in percentage points."""
+        if v1 is None or v2 is None:
+            return cmp_row(label, "н/д", "н/д", "н/д")
         d = round(v2 - v1, 1)
         sign = "+" if d >= 0 else ""
         return cmp_row(label, format_rate(v1), format_rate(v2), f"{sign}{format_decimal(d)} п.п.")
 
     divider = "─" * DIVIDER_WIDTH
+    # Extended metrics (probe 2026-10): each side is None when never measured,
+    # so the row honestly degrades to «н/д».
+    ext1_follows, ext2_follows = follow_activity(p1_stats), follow_activity(p2_stats)
+    ext1_contacts, ext2_contacts = contact_actions(p1_stats), contact_actions(p2_stats)
+    ext1_reposts, ext2_reposts = reposts_total(p1_stats), reposts_total(p2_stats)
+    split1 = audience_split(aggregate_breakdowns(p1_stats), "views")
+    split2 = audience_split(aggregate_breakdowns(p2_stats), "views")
+
+    def split_share(split):
+        if not split:
+            return None
+        total = split["followers"] + split["non_followers"]
+        return split["followers"] / total * 100 if total else None
+
+    def watch_seconds(posts):
+        watch = reels_watch_summary(posts)
+        return round(watch["avg_watch_time"] / 1000, 1) if watch else None
+
     activity_rows = [
         cmp_line(L_FOLLOWERS_GROWTH, s1["followers_growth"], s2["followers_growth"]),
+        cmp_line(L_FOLLOWS_ONLY, ext1_follows and ext1_follows["follows"], ext2_follows and ext2_follows["follows"]),
+        cmp_line(L_UNFOLLOWS_ONLY, ext1_follows and ext1_follows["unfollows"], ext2_follows and ext2_follows["unfollows"]),
         cmp_line(L_REACH, s1["reach_total"], s2["reach_total"]),
         cmp_line(L_VIEWS, s1["views_total"], s2["views_total"]),
         cmp_line(L_ENGAGED, s1["accounts_engaged_total"], s2["accounts_engaged_total"]),
+        cmp_rate_row(L_AUDIENCE_SPLIT, split_share(split1), split_share(split2)),
+        cmp_line(L_CONTACT_ACTIONS, ext1_contacts and ext1_contacts["total"], ext2_contacts and ext2_contacts["total"]),
+        cmp_line(L_REPOSTS, ext1_reposts, ext2_reposts),
     ]
     # Per-day rows only carry information for periods of different lengths; for
     # equal lengths they are just the row above divided by the day count.
@@ -776,6 +802,7 @@ async def generate_comparison_periods_report(
             cmp_line(L_POST_SAVES_TOTAL, c1["total_saves"], c2["total_saves"]),
             cmp_line(L_POST_SHARES_TOTAL, c1["total_shares"], c2["total_shares"]),
             cmp_rate_row(L_POST_ER, c1["engagement_rate"], c2["engagement_rate"]),
+            cmp_line(f"{L_REELS_WATCH}, сек", watch_seconds(p1_posts), watch_seconds(p2_posts), decimals=1),
         ]),
         "\n".join([
             SEC_STORIES, divider,

@@ -356,6 +356,12 @@ def test_comparison_wording_is_human_and_consistent():
     # rate delta lives in percentage points, values carry percent signs
     assert cmp_row(L_POST_ER, "6,1%", "3,8%", "-2,3 п.п.") in text
     assert "(-37,7%)" not in text
+    # extended metrics degrade to «н/д» when never measured (presence rule)
+    from reports.naming import L_FOLLOWS_ONLY, L_CONTACT_ACTIONS, L_REPOSTS, L_AUDIENCE_SPLIT
+    assert cmp_row(L_FOLLOWS_ONLY, "н/д", "н/д", "н/д") in text
+    assert cmp_row(L_CONTACT_ACTIONS, "н/д", "н/д", "н/д") in text
+    assert cmp_row(L_REPOSTS, "н/д", "н/д", "н/д") in text
+    assert cmp_row(L_AUDIENCE_SPLIT, "н/д", "н/д", "н/д") in text
     # formats and top posts: Russian type names, spaced thousands, commas
     assert "• Карусель — постов: 0 → 1; средний охват: 0 → 1 000; ER: 0,0% → 3,8%" in text
     assert "• Reels — постов: 1 → 0; средний охват: 1 000 → 0; ER: 6,1% → 0,0%" in text
