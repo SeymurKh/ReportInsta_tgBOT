@@ -229,6 +229,13 @@ class PeriodSnapshot(Base):
     shares = Column(Integer, nullable=True)
     total_interactions = Column(Integer, nullable=True)
     profile_views = Column(Integer, nullable=True)
+    # Extended metrics (probe 2026-10): period totals keep reports honest for
+    # any window even when day-level collection has gaps.
+    profile_links_taps = Column(Integer, nullable=True)
+    reposts = Column(Integer, nullable=True)
+    follows = Column(Integer, nullable=True)
+    unfollows = Column(Integer, nullable=True)
+    breakdowns = Column(Text, nullable=True)  # JSON breakdown sets for the window
     collected_at = Column(DateTime, nullable=True)
     metrics_present = Column(Text, nullable=True)  # JSON list of metric names
 

@@ -150,6 +150,16 @@ def _apply_lightweight_migrations(sync_conn) -> None:
             "ALTER TABLE posts ADD COLUMN avg_watch_time INTEGER",
         ("posts", "total_watch_time"):
             "ALTER TABLE posts ADD COLUMN total_watch_time INTEGER",
+        ("period_snapshots", "profile_links_taps"):
+            "ALTER TABLE period_snapshots ADD COLUMN profile_links_taps INTEGER",
+        ("period_snapshots", "reposts"):
+            "ALTER TABLE period_snapshots ADD COLUMN reposts INTEGER",
+        ("period_snapshots", "follows"):
+            "ALTER TABLE period_snapshots ADD COLUMN follows INTEGER",
+        ("period_snapshots", "unfollows"):
+            "ALTER TABLE period_snapshots ADD COLUMN unfollows INTEGER",
+        ("period_snapshots", "breakdowns"):
+            "ALTER TABLE period_snapshots ADD COLUMN breakdowns TEXT",
     }
     for (table, column), ddl in migrations.items():
         if table in existing_tables and (table, column) not in existing_columns:

@@ -64,7 +64,9 @@ def test_period_summary_empty():
     s = calculate_period_summary([])
     assert s["followers_growth"] is None
     assert s["followers_growth_known"] is False
-    assert s["reach_total"] == 0
+    # Empty period is «н/д» — a missing metric must never look like a real zero
+    assert s["reach_total"] is None
+    assert s["reach_avg_daily"] is None
 
 
 def test_period_summary_values():
@@ -299,7 +301,7 @@ def test_daily_peaks_and_quality_summary():
 def test_contact_actions_agree_and_coverage_is_reported():
     from types import SimpleNamespace
     import json as _json
-    from analytics.calculations import contact_actions, extended_coverage
+    from analytics.calculations import contact_actions, contact_facts
 
     def row(d, scalar, breakdown, present):
         return SimpleNamespace(
@@ -325,11 +327,15 @@ def test_contact_actions_agree_and_coverage_is_reported():
     assert contact_actions([only_bd]) == {"total": 4, "buttons": {"EMAIL": 4}}
 
     unmeasured = row(date(2026, 10, 4), 0, None, [])
-    cov = extended_coverage([ok, bad, unmeasured])
-    assert cov["period_days"] == 3
-    assert cov["per_metric"]["profile_links_taps"] == 2
-    assert cov["per_metric"]["follows"] == 2
-    assert cov["per_metric"]["reposts"] == 0
+    assert contact_actions([unmeasured]) is None
+
+    # contact_facts is the shared constructor for period totals (API windows)
+    assert contact_facts(28, {"DIRECTION": 24, "CALL": 4}) == {
+        "total": 28, "buttons": {"DIRECTION": 24, "CALL": 4},
+    }
+    assert contact_facts(28, {"DIRECTION": 800}) == {"total": 28, "buttons": {}}
+    assert contact_facts(None, {"EMAIL": 3}) == {"total": 3, "buttons": {"EMAIL": 3}}
+    assert contact_facts(None, {}) is None
 
 
 def test_corrupt_metric_metadata_is_reported_as_unknown_not_crashed():

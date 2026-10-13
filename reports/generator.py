@@ -9,9 +9,9 @@ from analytics.calculations import (
     calculate_period_summary, calculate_content_summary, calculate_stories_summary,
     get_best_post, get_best_story, detect_trend, top_posts_by_metric,
     compare_content_formats, daily_peaks, data_quality_summary, metric_is_present,
-    aggregate_breakdowns, audience_split, contact_actions, follow_activity,
-    reposts_total, best_post_by_followers, reels_watch_summary,
-    summarize_audience_snapshots, extended_coverage,
+    aggregate_breakdowns, audience_split, contact_actions, contact_facts,
+    follow_activity, reposts_total, best_post_by_followers, reels_watch_summary,
+    summarize_audience_snapshots,
 )
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from reports.naming import (
@@ -82,9 +82,14 @@ def _merge_period_totals(stats_summary: dict, totals: dict) -> dict:
         if totals.get(api_key) is not None:
             stats_summary[f"{summary_key}_days_sum"] = stats_summary.get(summary_key)
             stats_summary[summary_key] = totals[api_key]
-    for api_key in ("likes", "comments", "saves", "shares", "total_interactions", "profile_views"):
+    for api_key in (
+        "likes", "comments", "saves", "shares", "total_interactions", "profile_views",
+        "profile_links_taps", "reposts", "follows", "unfollows",
+    ):
         if totals.get(api_key) is not None:
             stats_summary[f"{api_key}_total"] = totals[api_key]
+    if totals.get("breakdowns"):
+        stats_summary["breakdowns_total"] = totals["breakdowns"]
     stats_summary["totals_from_api"] = bool(totals)
     return stats_summary
 
@@ -290,6 +295,28 @@ async def generate_report(
     except Exception as error:  # table may be missing on legacy DBs — never crash a report
         logger.warning("Audience snapshots unavailable for @%s: %s", account.username, error)
         demographics = {}
+
+    # Authoritative period totals beat sums of collected days — the report must
+    # show the real period numbers («честные цифры») whenever the API provided
+    # them, day-based values stay as the fallback when totals are unavailable.
+    if stats_summary.get("follows_total") is not None or stats_summary.get("unfollows_total") is not None:
+        follows_activity = {
+            "follows": stats_summary.get("follows_total"),
+            "unfollows": stats_summary.get("unfollows_total"),
+        }
+    if stats_summary.get("breakdowns_total") is not None:
+        extended_breakdowns = stats_summary["breakdowns_total"]
+        audience = audience_split(extended_breakdowns, "views")
+    if (
+        stats_summary.get("profile_links_taps_total") is not None
+        or stats_summary.get("breakdowns_total") is not None
+    ):
+        buttons = (stats_summary.get("breakdowns_total") or {}).get(
+            "profile_links_taps", {}
+        ).get("contact_button_type")
+        contacts = contact_facts(stats_summary.get("profile_links_taps_total"), buttons)
+    if stats_summary.get("reposts_total") is not None:
+        reposts = stats_summary["reposts_total"]
     data_quality = data_quality_summary(
         stats_list, expected_days=(date_to - date_from).days + 1
     )
@@ -437,7 +464,7 @@ async def generate_report(
         (L_INTERACTIONS, interactions_str),
         (L_PROFILE_VIEWS, profile_views_str),
         (L_ACCOUNT_ER, account_er_str),
-        (L_REACH_DAILY, format_number(stats_summary["reach_avg_daily"])),
+        (L_REACH_DAILY, metric_str(stats_summary, "reach_avg_daily")),
     ]
     if audience and (audience["followers"] + audience["non_followers"]) > 0:
         split_total = audience["followers"] + audience["non_followers"]
@@ -536,18 +563,6 @@ async def generate_report(
     if young_days:
         warning_parts.append(
             f"⏳ Данные за {format_period(min(young_days), max(young_days))} ещё уточняются Instagram"
-        )
-    coverage = extended_coverage(stats_list)
-    incomplete = [
-        name for name, days in coverage["per_metric"].items()
-        if 0 < days < coverage["period_days"]
-    ]
-    if incomplete:
-        measured_min = min(coverage["per_metric"][name] for name in incomplete)
-        warning_parts.append(
-            f"⚠️ Новые метрики (подписки/отписки, кнопки связи, репосты) измерены "
-            f"не за все дни периода ({measured_min} из {coverage['period_days']}) — "
-            f"их суммы могут быть занижены"
         )
     warning_parts.extend(
         _data_quality_warnings(data_quality, content_summary, stories_summary, young_days)
@@ -756,12 +771,15 @@ async def generate_comparison_periods_report(
 
     divider = "─" * DIVIDER_WIDTH
     # Extended metrics (probe 2026-10): each side is None when never measured,
-    # so the row honestly degrades to «н/д».
-    ext1_follows, ext2_follows = follow_activity(p1_stats), follow_activity(p2_stats)
-    ext1_contacts, ext2_contacts = contact_actions(p1_stats), contact_actions(p2_stats)
-    ext1_reposts, ext2_reposts = reposts_total(p1_stats), reposts_total(p2_stats)
-    split1 = audience_split(aggregate_breakdowns(p1_stats), "views")
-    split2 = audience_split(aggregate_breakdowns(p2_stats), "views")
+    # so the row honestly degrades to «н/д». Day-based values are the fallback;
+    # authoritative period totals override them below.
+    follows_by_period = {1: follow_activity(p1_stats), 2: follow_activity(p2_stats)}
+    contacts_by_period = {1: contact_actions(p1_stats), 2: contact_actions(p2_stats)}
+    reposts_by_period = {1: reposts_total(p1_stats), 2: reposts_total(p2_stats)}
+    splits = {
+        1: audience_split(aggregate_breakdowns(p1_stats), "views"),
+        2: audience_split(aggregate_breakdowns(p2_stats), "views"),
+    }
 
     def split_share(split):
         if not split:
@@ -772,6 +790,34 @@ async def generate_comparison_periods_report(
     def watch_seconds(posts):
         watch = reels_watch_summary(posts)
         return round(watch["avg_watch_time"] / 1000, 1) if watch else None
+
+    # Authoritative period totals beat sums of collected days (same policy as
+    # the single-period report).
+    for summary, key in ((s1, 1), (s2, 2)):
+        if summary.get("follows_total") is not None or summary.get("unfollows_total") is not None:
+            follows_by_period[key] = {
+                "follows": summary.get("follows_total"),
+                "unfollows": summary.get("unfollows_total"),
+            }
+        if summary.get("breakdowns_total") is not None:
+            splits[key] = audience_split(summary["breakdowns_total"], "views")
+        if (
+            summary.get("profile_links_taps_total") is not None
+            or summary.get("breakdowns_total") is not None
+        ):
+            buttons = (summary.get("breakdowns_total") or {}).get(
+                "profile_links_taps", {}
+            ).get("contact_button_type")
+            contacts_by_period[key] = contact_facts(
+                summary.get("profile_links_taps_total"), buttons
+            )
+        if summary.get("reposts_total") is not None:
+            reposts_by_period[key] = summary["reposts_total"]
+
+    ext1_follows, ext2_follows = follows_by_period[1], follows_by_period[2]
+    ext1_contacts, ext2_contacts = contacts_by_period[1], contacts_by_period[2]
+    ext1_reposts, ext2_reposts = reposts_by_period[1], reposts_by_period[2]
+    split1, split2 = splits[1], splits[2]
 
     activity_rows = [
         cmp_line(L_FOLLOWERS_GROWTH, s1["followers_growth"], s2["followers_growth"]),
@@ -982,8 +1028,8 @@ async def generate_daily_digest(account, target_date: date | None = None) -> str
     return (
         f"@{account.username}: {growth_part} "
         f"(сейчас {format_number(current_followers) if current_followers is not None else 'н/д'}); "
-        f"охват (уникальные) {format_number(summary['reach_total'])}; "
-        f"просмотры контента {format_number(summary['views_total'])}; "
+        f"охват (уникальные) {metric_str(summary, 'reach_total')}; "
+        f"просмотры контента {metric_str(summary, 'views_total')}; "
         f"публикаций {len(posts_list)}; "
         f"сторис {stories_summary['total_stories']} "
         f"(👁 {format_number(stories_summary['total_views'])})"

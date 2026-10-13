@@ -724,6 +724,7 @@ async def get_posts(
 PERIOD_SNAPSHOT_METRICS = (
     "reach", "accounts_engaged", "views", "likes", "comments", "saves",
     "shares", "total_interactions", "profile_views",
+    "profile_links_taps", "reposts", "follows", "unfollows",
 )
 
 
@@ -745,6 +746,8 @@ async def upsert_period_snapshot(
         )
         row = result.scalar_one_or_none()
         seen = [name for name in PERIOD_SNAPSHOT_METRICS if totals.get(name) is not None]
+        if totals.get("breakdowns") is not None:
+            seen.append("breakdowns")
         if row is None:
             row = PeriodSnapshot(
                 account_id=account_id,
@@ -762,6 +765,8 @@ async def upsert_period_snapshot(
             value = totals.get(name)
             if value is not None:
                 setattr(row, name, value)
+        if totals.get("breakdowns"):
+            row.breakdowns = _merge_breakdowns(row.breakdowns, totals["breakdowns"])
         await session.commit()
 
 
@@ -915,6 +920,8 @@ async def clear_all_data() -> None:
         await session.execute(text("DELETE FROM sync_leases"))
         await session.execute(text("DELETE FROM sync_runs"))
         await session.execute(text("DELETE FROM notification_deliveries"))
+        await session.execute(text("DELETE FROM audience_snapshots"))
+        await session.execute(text("DELETE FROM period_snapshots"))
         await session.execute(text("DELETE FROM stories"))
         await session.execute(text("DELETE FROM posts"))
         await session.execute(text("DELETE FROM daily_stats"))

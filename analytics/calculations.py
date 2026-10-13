@@ -68,8 +68,9 @@ def calculate_period_summary(stats_list: list) -> dict:
             "followers_start": None, "followers_end": None,
             "followers_growth": None, "followers_growth_pct": None,
             "followers_growth_known": False,
-            "reach_total": 0, "views_total": 0, "accounts_engaged_total": 0,
-            "reach_avg_daily": 0, "views_avg_daily": 0, "accounts_engaged_avg_daily": 0,
+            # Missing data is «н/д», never a fake zero.
+            "reach_total": None, "views_total": None, "accounts_engaged_total": None,
+            "reach_avg_daily": None, "views_avg_daily": None, "accounts_engaged_avg_daily": None,
         }
 
     last = stats_list[-1]
@@ -459,14 +460,32 @@ def audience_split(breakdowns: dict, metric: str = "views") -> dict | None:
     return {"followers": followers, "non_followers": non_followers}
 
 
+def contact_facts(total: int | None, buttons: dict | None) -> dict | None:
+    """Consistent {"total", "buttons"} from any source (see contact_actions).
+
+    The scalar total and the breakdown come from different API requests: when
+    they disagree (a partial fetch) the scalar wins and the split is hidden
+    rather than shown next to contradictory numbers.
+    """
+    clean = {
+        key: value for key, value in (buttons or {}).items()
+        if isinstance(value, (int, float)) and value
+    }
+    buttons_sum = sum(clean.values())
+    if not total:
+        total = buttons_sum
+    elif buttons_sum and buttons_sum != total:
+        clean = {}
+    if not total and not clean:
+        return None
+    return {"total": total, "buttons": clean}
+
+
 def contact_actions(stats_list: list) -> dict | None:
     """Aggregated contact-button taps with presence semantics.
 
     Returns {"total": n, "buttons": {label: n}} or None when the metric was
-    never measured in the period (fresh zero != real zero). The scalar total
-    and the button breakdown come from different API requests: when they
-    disagree (a partial fetch) the scalar wins and the split is hidden rather
-    than shown next to contradictory numbers.
+    never measured in the period (fresh zero != real zero).
     """
     measured = [row for row in stats_list if metric_is_present(row, "profile_links_taps")]
     entry = aggregate_breakdowns(stats_list).get("profile_links_taps", {}).get(
@@ -475,34 +494,7 @@ def contact_actions(stats_list: list) -> dict | None:
     if not measured and not entry:
         return None
     total = sum(getattr(row, "profile_links_taps", 0) or 0 for row in measured)
-    buttons = {
-        key: value for key, value in (entry or {}).items()
-        if isinstance(value, (int, float)) and value
-    }
-    buttons_sum = sum(buttons.values())
-    if not total:
-        total = buttons_sum
-    elif buttons_sum and buttons_sum != total:
-        buttons = {}
-    return {"total": total, "buttons": buttons}
-
-
-EXTENDED_SUM_METRICS = ("profile_links_taps", "follows", "unfollows", "reposts")
-
-
-def extended_coverage(stats_list: list) -> dict:
-    """Measured-day coverage for the summed extended metrics.
-
-    Sums over a partially measured period silently undercount, so reports
-    disclose «N из M дней» instead of pretending a full period.
-    """
-    return {
-        "period_days": len(stats_list),
-        "per_metric": {
-            name: sum(1 for row in stats_list if metric_is_present(row, name))
-            for name in EXTENDED_SUM_METRICS
-        },
-    }
+    return contact_facts(total, entry)
 
 
 def follow_activity(stats_list: list) -> dict | None:

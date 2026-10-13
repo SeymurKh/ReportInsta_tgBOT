@@ -329,6 +329,25 @@ def _comparison_stats(start, days):
     ]
 
 
+def test_report_prefers_period_totals_for_extended_metrics():
+    """«Честные цифры»: the report must show the API period total (882 taps),
+    never a sum of partially collected days (28)."""
+    from reports.naming import kv_row, L_CONTACT_ACTIONS
+
+    totals = {
+        "reach": 16663, "accounts_engaged": 1053, "views": 160856,
+        "likes": 1674, "comments": 46, "saves": 120, "shares": 580,
+        "total_interactions": 3024, "profile_views": 6627,
+        "profile_links_taps": 882,
+        "breakdowns": {"profile_links_taps": {"contact_button_type": {
+            "DIRECTION": 725, "CALL": 154, "EMAIL": 3,
+        }}},
+    }
+    text = _mocked_report(totals=totals)["text"]
+    assert kv_row(L_CONTACT_ACTIONS, "882 (адрес 725 · звонок 154 · почта 3)") in text
+    assert "Новые метрики" not in text  # the coverage warning is gone entirely
+
+
 def test_comparison_wording_is_human_and_consistent():
     from datetime import date, datetime
     from types import SimpleNamespace

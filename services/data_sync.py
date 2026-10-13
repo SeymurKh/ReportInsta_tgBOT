@@ -473,13 +473,50 @@ async def _refresh_standard_period_snapshots(
                 "Period totals %sd failed for @%s: %s", window_days, account.username, error
             )
             continue
+        totals = await _add_period_extended(
+            client, _day_start(start), _day_end(period_end), totals
+        )
         await crud.upsert_period_snapshot(
             account.id, start, period_end, totals, collected_at=now
         )
 
 
 def _snapshot_to_dict(snapshot) -> dict:
-    return {name: getattr(snapshot, name, None) for name in crud.PERIOD_SNAPSHOT_METRICS}
+    result = {name: getattr(snapshot, name, None) for name in crud.PERIOD_SNAPSHOT_METRICS}
+    raw = getattr(snapshot, "breakdowns", None)
+    if raw:
+        try:
+            decoded = json.loads(raw)
+            if isinstance(decoded, dict):
+                result["breakdowns"] = decoded
+        except (TypeError, ValueError):
+            pass
+    return result
+
+
+async def _add_period_extended(client, since_dt: datetime, until_dt: datetime, totals: dict) -> dict:
+    """Extended period totals + breakdown sets (best effort, never fatal).
+
+    Separate requests on purpose: one unsupported metric must not take down
+    the core period totals.
+    """
+    try:
+        totals.update(await client.get_account_day_extended(since_dt, until_dt))
+    except InstagramAPIError as error:
+        logger.info("Extended period totals failed: %s", error)
+    try:
+        breakdowns = await client.get_account_day_breakdowns(since_dt, until_dt)
+    except InstagramAPIError as error:
+        logger.info("Period breakdowns failed: %s", error)
+        breakdowns = {}
+    if breakdowns:
+        totals["breakdowns"] = breakdowns
+        follows, unfollows = _follow_split(breakdowns)
+        if follows is not None:
+            totals["follows"] = follows
+        if unfollows is not None:
+            totals["unfollows"] = unfollows
+    return totals
 
 
 async def ensure_period_snapshot(account, date_from: date, date_to: date) -> dict:
@@ -509,5 +546,6 @@ async def ensure_period_snapshot(account, date_from: date, date_to: date) -> dic
     finally:
         await client.close()
 
+    totals = await _add_period_extended(client, _day_start(date_from), _day_end(date_to), totals)
     await crud.upsert_period_snapshot(account.id, date_from, date_to, totals, collected_at=now)
     return totals
