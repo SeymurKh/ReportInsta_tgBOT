@@ -348,6 +348,22 @@ def test_report_prefers_period_totals_for_extended_metrics():
     assert "Новые метрики" not in text  # the coverage warning is gone entirely
 
 
+def test_growth_is_net_of_unfollows_when_totals_know_the_split():
+    """«Прирост» is net (follows − unfollows): follower_count is gross follows
+    («новые подписчики») and must not be presented as growth."""
+    from reports.naming import kv_row, L_FOLLOWERS_GROWTH
+
+    totals = {
+        "reach": 1000, "accounts_engaged": 100, "views": 5000,
+        "likes": 50, "comments": 5, "saves": 5, "shares": 5,
+        "total_interactions": 65, "profile_views": 200,
+        "follows": 10, "unfollows": 4,
+    }
+    text = _mocked_report(totals=totals)["text"]
+    # net = 10 − 4 = 6; base = 100 − 6 = 94 → 6 / 94 = +6,4%
+    assert kv_row(L_FOLLOWERS_GROWTH, "+6 (+6,4%)") in text
+
+
 def test_comparison_wording_is_human_and_consistent():
     from datetime import date, datetime
     from types import SimpleNamespace

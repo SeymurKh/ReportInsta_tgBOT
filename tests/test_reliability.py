@@ -615,6 +615,11 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(row.breakdowns)["views"]["follow_type"]["FOLLOWER"], 30)
         self.assertIn("reposts", json.loads(row.metrics_present))
         self.assertEqual(_follow_split(breakdowns), (5, 2))
+        # Live API labels: FOLLOWER = accounts that followed, NON_FOLLOWER = left
+        self.assertEqual(
+            _follow_split({"follows_and_unfollows": {"follow_type": {"FOLLOWER": 352, "NON_FOLLOWER": 149}}}),
+            (352, 149),
+        )
         # Unknown dimension labels must never be guessed into the scalars.
         self.assertEqual(
             _follow_split({"follows_and_unfollows": {"follow_type": {"SOMETHING": 1}}}),

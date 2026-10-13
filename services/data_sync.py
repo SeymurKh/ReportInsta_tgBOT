@@ -39,18 +39,20 @@ def _day_end(d: date) -> datetime:
 def _follow_split(breakdowns: dict) -> tuple[int | None, int | None]:
     """Extract (follows, unfollows) from the follows_and_unfollows breakdown.
 
-    Only exact known dimension labels are mapped — anything else keeps its raw
-    form in the stored breakdowns and leaves the scalars unknown (NULL).
+    The live API returns the dimension values FOLLOWER (accounts that followed)
+    and NON_FOLLOWER (accounts that unfollowed or left Instagram); older probe
+    fixtures used FOLLOWS/UNFOLLOWS. Anything else keeps its raw form in the
+    stored breakdowns and leaves the scalars unknown (NULL).
     """
     entry = (breakdowns.get("follows_and_unfollows") or {}).get("follow_type") or {}
     follows = unfollows = 0
     seen_follows = seen_unfollows = False
     for key, value in entry.items():
         upper = str(key).upper()
-        if upper in {"UNFOLLOWS", "UNFOLLOW", "UNFOLLOWED"}:
+        if upper in {"UNFOLLOWS", "UNFOLLOW", "UNFOLLOWED", "NON_FOLLOWER", "NON_FOLLOWERS"}:
             unfollows += value
             seen_unfollows = True
-        elif upper in {"FOLLOWS", "FOLLOW", "FOLLOWED"}:
+        elif upper in {"FOLLOWS", "FOLLOW", "FOLLOWED", "FOLLOWER", "FOLLOWERS"}:
             follows += value
             seen_follows = True
     return (
@@ -89,8 +91,13 @@ async def fix_followers_history(
             break
         if not isinstance(metrics_present, list) or "follower_count" not in metrics_present:
             break
+        # follower_count is gross follows («новые подписчики»); the real count
+        # change is net (follows − unfollows) wherever the split was collected.
+        day_delta = next_row.follower_count or 0
+        if {"follows", "unfollows"} <= set(metrics_present):
+            day_delta = (next_row.follows or 0) - (next_row.unfollows or 0)
         mapping[previous_date] = max(
-            mapping[cursor] - (next_row.follower_count or 0), 0
+            mapping[cursor] - day_delta, 0
         )
         cursor = previous_date
     await crud.bulk_update_followers(account_id, mapping)

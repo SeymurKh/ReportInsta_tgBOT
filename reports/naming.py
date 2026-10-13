@@ -30,13 +30,13 @@ SEC_COMPARISON = "📊 СРАВНЕНИЕ ПЕРИОДОВ"
 
 # ── Followers ──
 L_FOLLOWERS_NOW = "Сейчас"
-L_FOLLOWERS_GROWTH = "Прирост за период"
-L_GROWTH_SPEED = "Скорость роста"
+L_FOLLOWERS_GROWTH = "Прирост (нетто)"
+L_GROWTH_SPEED = "Скорость подписок"
 
 
 def growth_speed_label(window: int) -> str:
     """Dynamic window label — the compared windows are not always 7 days."""
-    return f"Скорость роста ({window} дн. к {window} дн.)"
+    return f"Скорость подписок ({window} дн. к {window} дн.)"
 
 # ── Account activity (Instagram API period totals) ──
 L_REACH = "Охват (уникальные)"

@@ -90,6 +90,19 @@ def _merge_period_totals(stats_summary: dict, totals: dict) -> dict:
             stats_summary[f"{api_key}_total"] = totals[api_key]
     if totals.get("breakdowns"):
         stats_summary["breakdowns_total"] = totals["breakdowns"]
+    follows, unfollows = totals.get("follows"), totals.get("unfollows")
+    if follows is not None and unfollows is not None:
+        # follower_count («новые подписчики») is gross follows — the real
+        # growth is net: follows − unfollows. «Прирост» must show the truth.
+        net = follows - unfollows
+        stats_summary["followers_growth"] = net
+        stats_summary["followers_growth_from_totals"] = True
+        end = stats_summary.get("followers_end")
+        if end is not None:
+            start = end - net
+            stats_summary["followers_start"] = start if start >= 0 else None
+            if start and start > 0:
+                stats_summary["followers_growth_pct"] = round(net / start * 100, 1)
     stats_summary["totals_from_api"] = bool(totals)
     return stats_summary
 
@@ -331,7 +344,7 @@ async def generate_report(
         and data_quality["legacy_unknown_days"] == 0
         and data_quality["metric_missing_days"].get("follower_count", 0) == 0
     )
-    if not follower_growth_known:
+    if not follower_growth_known and not stats_summary.get("followers_growth_from_totals"):
         stats_summary["followers_growth"] = None
         stats_summary["followers_growth_pct"] = None
         stats_summary["followers_start"] = None
@@ -712,7 +725,7 @@ async def generate_comparison_periods_report(
             and quality["legacy_unknown_days"] == 0
             and quality["metric_missing_days"].get("follower_count", 0) == 0
         )
-        if not follower_growth_known:
+        if not follower_growth_known and not summary.get("followers_growth_from_totals"):
             summary["followers_start"] = None
             summary["followers_growth"] = None
             summary["followers_growth_pct"] = None
