@@ -47,6 +47,88 @@ async def cmd_status(message: Message):
     await message.answer("\n".join(lines), parse_mode=None)
 
 
+@router.message(Command("audience", "аудитория"))
+async def cmd_audience(message: Message):
+    """Audience facts for the last 30 days: split, follows, contact buttons,
+    follower demographics and the best posting days."""
+    from datetime import timedelta
+    from analytics.calculations import (
+        aggregate_breakdowns, audience_split, contact_actions, follow_activity,
+        online_followers_peak, summarize_audience_snapshots,
+    )
+
+    accounts = await crud.get_all_accounts()
+    if not accounts:
+        await message.answer("❌ Нет добавленных аккаунтов.")
+        return
+
+    weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    for acc in accounts:
+        date_to = app_today()
+        date_from = date_to - timedelta(days=29)
+        stats_list = await crud.get_daily_stats(acc.id, date_from, date_to)
+        breakdowns = aggregate_breakdowns(stats_list)
+        split = audience_split(breakdowns, "views")
+        follows = follow_activity(stats_list)
+        contacts = contact_actions(stats_list)
+        peak = online_followers_peak(stats_list)
+        try:
+            demographics = summarize_audience_snapshots(
+                await crud.get_audience_snapshots(acc.id, as_of=date_to)
+            )
+        except Exception as error:  # legacy DB without the table — degrade gracefully
+            logger.warning("Audience snapshots unavailable for @%s: %s", acc.username, error)
+            demographics = {}
+
+        lines = [f"👥 Аудитория @{acc.username} — последние 30 дней\n"]
+        if split and (split["followers"] + split["non_followers"]) > 0:
+            total = split["followers"] + split["non_followers"]
+            lines.append(
+                f"Просмотры: подписчики {split['followers'] / total * 100:.1f}% · "
+                f"неподписчики {split['non_followers'] / total * 100:.1f}%"
+            )
+        if follows:
+            lines.append(
+                f"Подписки / отписки: +{format_number(follows['follows'])} / "
+                f"−{format_number(follows['unfollows'])}"
+            )
+        if contacts and contacts.get("total"):
+            button_names = {
+                "DIRECTION": "адрес", "CALL": "звонок", "EMAIL": "почта",
+                "TEXT": "SMS", "BOOK_NOW": "бронь", "INSTANT_EXPERIENCE": "ссылка",
+                "UNDEFINED": "прочее", "BIO_LINK_CLICKED": "ссылка в шапке",
+            }
+            buttons = " · ".join(
+                f"{button_names.get(str(key).upper(), key)} {format_number(value)}"
+                for key, value in sorted(contacts["buttons"].items(), key=lambda kv: -kv[1])
+            )
+            lines.append(
+                f"Кнопки связи: {format_number(contacts['total'])}"
+                + (f" ({buttons})" if buttons else "")
+            )
+        follower_demo = demographics.get("follower") or {}
+        if follower_demo:
+            lines.append("\n🌍 Подписчики:")
+            dimension_names = {
+                "country": "Страны", "city": "Города", "age_gender": "Возраст и пол",
+            }
+            for dimension in ("country", "city", "age_gender"):
+                items = follower_demo.get(dimension)
+                if not items:
+                    continue
+                rendered = []
+                for key, value in items[:4]:
+                    label = str(key).replace("|M", ", муж").replace("|F", ", жен")
+                    rendered.append(f"{label} — {format_number(value)}")
+                lines.append(f"  {dimension_names.get(dimension, dimension)}: " + ", ".join(rendered))
+        if peak:
+            best = " ".join(weekdays[d] for d in peak["best_weekdays"])
+            lines.append(f"\nЛучшие дни для публикаций (по активности подписчиков): {best}")
+        if len(lines) == 1:
+            lines.append("Данные по аудитории ещё не собраны — появятся после ближайшей синхронизации.")
+        await message.answer("\n".join(lines), parse_mode=None)
+
+
 # ── Main menu buttons ──
 
 async def _show_accounts(message: Message, state: FSMContext, flow: str, text: str):
