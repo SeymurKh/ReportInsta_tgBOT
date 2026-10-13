@@ -36,6 +36,29 @@ def _day_end(d: date) -> datetime:
     return datetime(d.year, d.month, d.day, 23, 59, 59)
 
 
+def _follow_split(breakdowns: dict) -> tuple[int | None, int | None]:
+    """Extract (follows, unfollows) from the follows_and_unfollows breakdown.
+
+    Only exact known dimension labels are mapped — anything else keeps its raw
+    form in the stored breakdowns and leaves the scalars unknown (NULL).
+    """
+    entry = (breakdowns.get("follows_and_unfollows") or {}).get("follow_type") or {}
+    follows = unfollows = 0
+    seen_follows = seen_unfollows = False
+    for key, value in entry.items():
+        upper = str(key).upper()
+        if upper in {"UNFOLLOWS", "UNFOLLOW", "UNFOLLOWED"}:
+            unfollows += value
+            seen_unfollows = True
+        elif upper in {"FOLLOWS", "FOLLOW", "FOLLOWED"}:
+            follows += value
+            seen_follows = True
+    return (
+        follows if seen_follows else None,
+        unfollows if seen_unfollows else None,
+    )
+
+
 async def fix_followers_history(
     account_id: int, current_followers: int, anchor_date: date
 ) -> None:
@@ -229,6 +252,12 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
             for row in await crud.get_daily_stats(account.id, since_dt.date(), until_dt.date())
         }
 
+        online_series: dict[str, int] = {}
+        try:
+            online_series = await client.get_online_followers_series(since_dt, until_dt)
+        except InstagramAPIError as error:
+            logger.info(f"online_followers unavailable for @{account.username}: {error}")
+
         # 2. Per-bucket account metrics for buckets that still change or are new
         for bucket in buckets:
             row = saved.get(bucket.label)
@@ -255,7 +284,33 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
                 partial = True
                 failed_days.add(bucket.day_key)
                 totals = {}
-            day_payloads[bucket.day_key] = {"bucket": bucket, "totals": totals}
+            breakdowns: dict = {}
+            try:
+                breakdowns = await client.get_account_day_breakdowns(
+                    bucket.start, bucket.end
+                )
+            except InstagramAPIError as error:
+                logger.info(
+                    "Day breakdowns failed for @%s (%s): %s",
+                    account.username, bucket.day_key, error,
+                )
+            try:
+                totals.update(
+                    await client.get_account_day_extended(bucket.start, bucket.end)
+                )
+            except InstagramAPIError as error:
+                logger.info(
+                    "Extended day metrics failed for @%s (%s): %s",
+                    account.username, bucket.day_key, error,
+                )
+            follows_delta, unfollows_delta = _follow_split(breakdowns)
+            if follows_delta is not None:
+                totals["follows"] = follows_delta
+            if unfollows_delta is not None:
+                totals["unfollows"] = unfollows_delta
+            day_payloads[bucket.day_key] = {
+                "bucket": bucket, "totals": totals, "breakdowns": breakdowns,
+            }
 
         # 3. Persist refreshed buckets (time-series + account metrics together)
         for day_key, payload in sorted(day_payloads.items()):
@@ -267,6 +322,9 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
                 # here means «unknown», so it must not claim provenance.
                 day_values.pop("follower_count", None)
             present = [name for name, value in day_values.items() if value is not None]
+            online = online_series.get(day_key)
+            if online is not None:
+                totals["online_followers"] = online
             present += [name for name in totals]
             await crud.save_daily_stats(
                 account_id=account.id,
@@ -284,6 +342,7 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
                 bucket_start=bucket.start,
                 bucket_end=bucket.end,
                 account_metrics=totals,
+                breakdowns=payload.get("breakdowns") or None,
             )
         # 4. Profile totals
         try:
@@ -312,6 +371,25 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
         else:
             partial = True
             partial_reasons.append("Instagram не вернул общий счётчик подписчиков")
+
+        # 4b. Audience demographics — once per day; the data drifts slowly and
+        # costs nine API requests (3 scopes x 3 dimensions).
+        try:
+            today = now.date()
+            known = await crud.get_audience_snapshots(account.id)
+            if not any(s.as_of == today for s in known):
+                for snap in await client.get_account_demographics():
+                    await crud.upsert_audience_snapshot(
+                        account.id,
+                        snap["scope"],
+                        snap["timeframe"],
+                        snap["dimension"],
+                        today,
+                        snap["payload"],
+                        collected_at=now,
+                    )
+        except Exception as error:
+            logger.info(f"Demographics unavailable for @{account.username}: {error}")
 
         # 5. Posts
         if refresh_posts:

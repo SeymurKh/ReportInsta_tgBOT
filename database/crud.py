@@ -7,7 +7,7 @@ from sqlalchemy import select, update, and_, text
 from sqlalchemy.exc import IntegrityError
 
 from database.engine import async_session_factory
-from database.models import Account, DailyStats, Post, Story, NotificationDelivery, PeriodSnapshot, SyncRun, SyncLease
+from database.models import Account, DailyStats, Post, Story, NotificationDelivery, PeriodSnapshot, SyncRun, SyncLease, AudienceSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +313,7 @@ def _merge_metrics_present(existing_raw: str | None, new_metrics) -> str | None:
 ACCOUNT_METRIC_FIELDS = (
     "likes", "comments", "saves", "shares", "replies",
     "total_interactions", "profile_views", "website_clicks",
+    "reposts", "follows", "unfollows", "profile_links_taps", "online_followers",
 )
 
 
@@ -332,6 +333,7 @@ async def save_daily_stats(
     bucket_start: datetime | None = None,
     bucket_end: datetime | None = None,
     account_metrics: dict | None = None,
+    breakdowns: dict | None = None,
 ) -> None:
     async with async_session_factory() as session:
         existing = await session.execute(
@@ -364,6 +366,8 @@ async def save_daily_stats(
                     setattr(row, field, value)
             if metrics_present is not None:
                 row.metrics_present = _merge_metrics_present(row.metrics_present, metrics_present)
+            if breakdowns:
+                row.breakdowns = json.dumps(breakdowns, ensure_ascii=False, sort_keys=True)
         else:
             session.add(DailyStats(
                 account_id=account_id, date=stats_date,
@@ -376,11 +380,72 @@ async def save_daily_stats(
                 bucket_start=bucket_start,
                 bucket_end=bucket_end,
                 **{field: (account_metrics or {}).get(field) or 0 for field in ACCOUNT_METRIC_FIELDS},
+                breakdowns=(json.dumps(breakdowns, ensure_ascii=False, sort_keys=True)
+                            if breakdowns else None),
                 metrics_present=(json.dumps(sorted(set(metrics_present)))
                                  if metrics_present is not None else None),
             ))
 
         await session.commit()
+
+
+# ────────────────────── Audience snapshots ──────────────────────
+
+
+async def upsert_audience_snapshot(
+    account_id: int,
+    scope: str,
+    timeframe: str,
+    dimension: str,
+    as_of: date,
+    payload: list[dict],
+    collected_at: datetime | None = None,
+) -> None:
+    """Store one demographics snapshot (unique per scope/dimension/as_of)."""
+    async with async_session_factory() as session:
+        existing = await session.execute(
+            select(AudienceSnapshot).where(
+                AudienceSnapshot.account_id == account_id,
+                AudienceSnapshot.scope == scope,
+                AudienceSnapshot.timeframe == timeframe,
+                AudienceSnapshot.dimension == dimension,
+                AudienceSnapshot.as_of == as_of,
+            )
+        )
+        row = existing.scalar_one_or_none()
+        encoded = json.dumps(payload, ensure_ascii=False)
+        if row:
+            row.payload = encoded
+            row.collected_at = collected_at
+        else:
+            session.add(AudienceSnapshot(
+                account_id=account_id, scope=scope, timeframe=timeframe,
+                dimension=dimension, as_of=as_of, payload=encoded,
+                collected_at=collected_at,
+            ))
+        await session.commit()
+
+
+async def get_audience_snapshots(
+    account_id: int, as_of: date | None = None
+) -> list[AudienceSnapshot]:
+    """Latest demographics snapshot per (scope, timeframe, dimension).
+
+    With `as_of`, only snapshots at or before that date are considered.
+    """
+    async with async_session_factory() as session:
+        query = select(AudienceSnapshot).where(
+            AudienceSnapshot.account_id == account_id
+        )
+        if as_of is not None:
+            query = query.where(AudienceSnapshot.as_of <= as_of)
+        result = await session.execute(query.order_by(AudienceSnapshot.as_of.desc()))
+        latest: dict[tuple, AudienceSnapshot] = {}
+        for row in result.scalars():
+            key = (row.scope, row.timeframe, row.dimension)
+            if key not in latest:
+                latest[key] = row
+        return list(latest.values())
 
 
 async def save_follower_snapshot(
@@ -538,11 +603,20 @@ async def save_posts(posts_data: list[dict]) -> None:
                     row.comments = post["comments"]
                 if not skip_insights:
                     insights_updated = False
-                    for field in ("saved", "shares", "reach", "total_interactions", "views"):
+                    for field in (
+                        "saved", "shares", "reach", "total_interactions", "views",
+                        # Extended metrics (probe 2026-10): None = not measured,
+                        # the previously stored value must survive.
+                        "follows", "profile_visits", "profile_activity",
+                        "avg_watch_time", "total_watch_time",
+                    ):
                         value = post.get(field)
                         if value is not None:
                             setattr(row, field, value)
                             insights_updated = True
+                    if post.get("profile_activity_breakdown") is not None:
+                        row.profile_activity_breakdown = post["profile_activity_breakdown"]
+                        insights_updated = True
                     if insights_updated:
                         row.insights_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     # Provenance is cumulative (same policy as daily stats and
@@ -559,7 +633,11 @@ async def save_posts(posts_data: list[dict]) -> None:
                 post["comments"] = post.get("comments") or 0
                 has_insights = any(
                     post.get(field) is not None
-                    for field in ("saved", "shares", "reach", "total_interactions", "views")
+                    for field in (
+                        "saved", "shares", "reach", "total_interactions", "views",
+                        "follows", "profile_visits", "profile_activity",
+                        "avg_watch_time", "total_watch_time",
+                    )
                 )
                 for field in ("saved", "shares", "reach", "total_interactions", "views"):
                     post[field] = post.get(field) or 0

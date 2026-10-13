@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -16,6 +17,36 @@ MEDIA_METRICS_MAP: dict[str, list[str]] = {
     "CAROUSEL_ALBUM": ["reach", "likes", "comments", "saved", "shares", "total_interactions"],
     "REELS": ["reach", "likes", "comments", "saved", "shares", "total_interactions", "views"],
 }
+
+# Extended media insight families (live-API probe 2026-10). Instagram rejects
+# a whole request that includes a metric unsupported for the product type
+# (reels reject the profile family; feed posts have no watch time), so each
+# family is requested separately and skipped silently when unsupported.
+MEDIA_PROFILE_METRICS = ["follows", "profile_visits", "profile_activity"]
+MEDIA_WATCHTIME_METRICS = ["ig_reels_avg_watch_time", "ig_reels_video_view_total_time"]
+MEDIA_PROFILE_METRIC_TYPES = {"IMAGE", "CAROUSEL_ALBUM", "VIDEO"}
+MEDIA_WATCHTIME_METRIC_TYPES = {"REELS", "VIDEO"}
+
+# Extended account metrics (live-API probe 2026-10), collected as a separate
+# request so an unsupported metric cannot take down the core day totals.
+ACCOUNT_DAY_EXTENDED_METRICS = ["reposts", "profile_links_taps"]
+
+# Account-level breakdown sets confirmed on the live probe: (metrics, breakdown)
+ACCOUNT_DAY_BREAKDOWN_REQUESTS = [
+    (["views", "reach"], "follow_type"),
+    (["views", "reach"], "media_product_type"),
+    (["profile_links_taps"], "contact_button_type"),
+    (["follows_and_unfollows"], "follow_type"),
+]
+
+# Demographics: one request per (scope, dimension) — the API accepts a single
+# breakdown per call and returns at most 45 buckets.
+DEMOGRAPHIC_SCOPES = [
+    "follower_demographics",
+    "engaged_audience_demographics",
+    "reached_audience_demographics",
+]
+DEMOGRAPHIC_DIMENSIONS = ["age,gender", "city", "country"]
 
 # Story metrics (plain, single request)
 STORY_METRICS: list[str] = [
@@ -78,6 +109,27 @@ def _parse_total_value_items(data: dict) -> dict:
         total = item.get("total_value")
         if name and isinstance(total, dict) and total.get("value") is not None:
             result[name] = total["value"]
+    return result
+
+
+def _parse_breakdown_items(data: dict) -> dict:
+    """{metric: {breakdown: {"dim1|dim2": value}}} from a total_value response.
+
+    Dimension values are joined with "|" for multi-key breakdowns (e.g.
+    age,gender -> "25-34|M"). Raw keys are preserved — semantics differ per
+    metric (follow_type means follower/non-follower for reach but
+    follows/unfollows for follows_and_unfollows).
+    """
+    result: dict = {}
+    for item in data.get("data", []):
+        name = item.get("name")
+        if not name:
+            continue
+        for br in item.get("total_value", {}).get("breakdowns", []):
+            breakdown_name = "|".join(br.get("dimension_keys", []))
+            for res in br.get("results", []):
+                key = "|".join(res.get("dimension_values", []))
+                result.setdefault(name, {}).setdefault(breakdown_name, {})[key] = res.get("value", 0)
     return result
 
 
@@ -323,6 +375,123 @@ class InstagramClient:
             since, until, metrics=ACCOUNT_DAY_TOTAL_METRICS
         )
 
+    # ────────────── Extended account metrics (probe 2026-10) ──────────────
+
+    async def get_account_day_extended(self, since: datetime, until: datetime) -> dict:
+        """Extended totals for one day bucket (reposts, contact buttons).
+
+        Separate request on purpose: an unsupported metric here must never
+        take down the core day totals.
+        """
+        return await self.get_account_totals(
+            since, until, metrics=ACCOUNT_DAY_EXTENDED_METRICS
+        )
+
+    async def get_account_day_breakdowns(self, since: datetime, until: datetime) -> dict:
+        """Breakdown sets for one day bucket (see ACCOUNT_DAY_BREAKDOWN_REQUESTS).
+
+        Returns {metric: {breakdown: {"dim": value}}}. Each request is optional
+        — account types differ, so failures are logged and skipped.
+        """
+        result: dict = {}
+        url = f"{self.base_url}/{self.user_id}/insights"
+        for metrics, breakdown in ACCOUNT_DAY_BREAKDOWN_REQUESTS:
+            try:
+                data = await self._request(url, {
+                    "metric": ",".join(metrics),
+                    "period": "day",
+                    "since": str(_to_unix(since)),
+                    "until": str(_to_unix(until)),
+                    "metric_type": "total_value",
+                    "breakdown": breakdown,
+                })
+            except InstagramAPIError as error:
+                logger.info("Breakdown %s unavailable: %s", breakdown, error)
+                continue
+            for metric, breakdowns in _parse_breakdown_items(data).items():
+                for breakdown_name, values in breakdowns.items():
+                    result.setdefault(metric, {})[breakdown_name] = values
+        return result
+
+    async def get_online_followers_series(
+        self, since: datetime, until: datetime
+    ) -> dict[str, int]:
+        """Daily counts of followers who were online.
+
+        Only time_series is populated (total_value/timeframes return empty) and
+        there is no hourly breakdown — this supports «best day» insights, not
+        «best hour».
+        """
+        url = f"{self.base_url}/{self.user_id}/insights"
+        data = await self._request(url, {
+            "metric": "online_followers",
+            "period": "day",
+            "since": str(_to_unix(since)),
+            "until": str(_to_unix(until)),
+            "metric_type": "time_series",
+        })
+        series: dict[str, int] = {}
+        for item in data.get("data", []):
+            if item.get("name") != "online_followers":
+                continue
+            for val in item.get("values", []):
+                end_time = val.get("end_time")
+                if not end_time:
+                    continue
+                try:
+                    label = parse_ig_timestamp(end_time).date().isoformat()
+                except (TypeError, ValueError):
+                    logger.warning("Ignoring invalid online_followers end_time %s", end_time)
+                    continue
+                series[label] = val.get("value", 0)
+        return series
+
+    async def get_account_demographics(
+        self, timeframe: str = "this_month"
+    ) -> list[dict]:
+        """Demographics of the follower / engaged / reached audience.
+
+        Lifetime metrics with top-45 buckets; one request per (scope,
+        dimension) because the API accepts a single breakdown per call.
+        Returns [{scope, timeframe, dimension, payload}] with payload =
+        [{"key": "25-34|M", "value": n}, ...]; empty payloads mean Instagram
+        had no demographic data for that slice.
+        """
+        url = f"{self.base_url}/{self.user_id}/insights"
+        snapshots: list[dict] = []
+        for scope in DEMOGRAPHIC_SCOPES:
+            for dimension in DEMOGRAPHIC_DIMENSIONS:
+                try:
+                    data = await self._request(url, {
+                        "metric": scope,
+                        "period": "lifetime",
+                        "timeframe": timeframe,
+                        "metric_type": "total_value",
+                        "breakdowns": dimension,
+                    })
+                except InstagramAPIError as error:
+                    logger.info(
+                        "Demographics %s[%s] unavailable: %s", scope, dimension, error
+                    )
+                    continue
+                payload: list[dict] = []
+                for item in data.get("data", []):
+                    if item.get("name") != scope:
+                        continue
+                    for br in item.get("total_value", {}).get("breakdowns", []):
+                        for res in br.get("results", []):
+                            payload.append({
+                                "key": "|".join(res.get("dimension_values", [])),
+                                "value": res.get("value", 0),
+                            })
+                snapshots.append({
+                    "scope": scope.replace("_demographics", ""),
+                    "timeframe": timeframe,
+                    "dimension": {"age,gender": "age_gender"}.get(dimension, dimension),
+                    "payload": payload,
+                })
+        return snapshots
+
     async def get_media_list(self, limit: int = 50) -> list[dict]:
         url = f"{self.base_url}/{self.user_id}/media"
         params = {
@@ -353,7 +522,54 @@ class InstagramClient:
                 result[name] = values[0].get("value", 0)
             elif "total_value" in item:
                 result[name] = item.get("total_value", {}).get("value", 0)
+
+        # Optional metric families (probe 2026-10). A request that includes a
+        # metric unsupported for the product type fails as a whole, so each
+        # family is requested separately and simply skipped when rejected.
+        if media_type in MEDIA_PROFILE_METRIC_TYPES:
+            result.update(await self._get_media_metric_family(
+                url, MEDIA_PROFILE_METRICS, media_id, "profile"
+            ))
+            if result.get("profile_activity"):
+                try:
+                    act = await self._request(url, {
+                        "metric": "profile_activity",
+                        "breakdown": "action_type",
+                    })
+                    for item in act.get("data", []):
+                        if item.get("name") != "profile_activity":
+                            continue
+                        breakdown = {}
+                        for br in item.get("total_value", {}).get("breakdowns", []):
+                            for res in br.get("results", []):
+                                key = "|".join(res.get("dimension_values", []))
+                                breakdown[key] = res.get("value", 0)
+                        result["profile_activity_breakdown"] = breakdown
+                except (NotEnoughViewersError, InstagramAPIError) as e:
+                    logger.info(f"Media {media_id} activity breakdown unavailable: {e}")
+        if media_type in MEDIA_WATCHTIME_METRIC_TYPES:
+            result.update(await self._get_media_metric_family(
+                url, MEDIA_WATCHTIME_METRICS, media_id, "watch-time"
+            ))
         return result
+
+    async def _get_media_metric_family(
+        self, url: str, metrics: list[str], media_id: str, label: str
+    ) -> dict:
+        try:
+            data = await self._request(url, {"metric": ",".join(metrics)})
+        except (NotEnoughViewersError, InstagramAPIError) as e:
+            logger.info(f"Media {media_id} {label} metrics unavailable: {e}")
+            return {}
+        family = {}
+        for item in data.get("data", []):
+            name = item.get("name")
+            values = item.get("values", [])
+            if values:
+                family[name] = values[0].get("value", 0)
+            elif "total_value" in item:
+                family[name] = item.get("total_value", {}).get("value", 0)
+        return family
 
     # ────────────────────── Stories ──────────────────────
 
@@ -487,8 +703,22 @@ class InstagramClient:
                 "reach": insights.get("reach"),
                 "total_interactions": insights.get("total_interactions"),
                 "views": insights.get("views"),
+                # Extended metrics (probe 2026-10) — NULL = not measured
+                # (product-type dependent), never zero-coerced.
+                "follows": insights.get("follows"),
+                "profile_visits": insights.get("profile_visits"),
+                "profile_activity": insights.get("profile_activity"),
+                "profile_activity_breakdown": (
+                    json.dumps(insights["profile_activity_breakdown"], sort_keys=True)
+                    if insights.get("profile_activity_breakdown") is not None else None
+                ),
+                "avg_watch_time": insights.get("avg_watch_time"),
+                "total_watch_time": insights.get("total_watch_time"),
                 "skip_insights": not fetch_insights,
-                "insights_present": sorted(insights) if fetch_insights else None,
+                "insights_present": (
+                    sorted(k for k in insights if not k.endswith("_breakdown"))
+                    if fetch_insights else None
+                ),
             })
         return posts, partial
 

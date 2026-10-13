@@ -126,6 +126,30 @@ def _apply_lightweight_migrations(sync_conn) -> None:
             "ALTER TABLE daily_stats ADD COLUMN profile_views INTEGER DEFAULT 0",
         ("daily_stats", "website_clicks"):
             "ALTER TABLE daily_stats ADD COLUMN website_clicks INTEGER DEFAULT 0",
+        ("daily_stats", "reposts"):
+            "ALTER TABLE daily_stats ADD COLUMN reposts INTEGER DEFAULT 0",
+        ("daily_stats", "follows"):
+            "ALTER TABLE daily_stats ADD COLUMN follows INTEGER DEFAULT 0",
+        ("daily_stats", "unfollows"):
+            "ALTER TABLE daily_stats ADD COLUMN unfollows INTEGER DEFAULT 0",
+        ("daily_stats", "profile_links_taps"):
+            "ALTER TABLE daily_stats ADD COLUMN profile_links_taps INTEGER DEFAULT 0",
+        ("daily_stats", "online_followers"):
+            "ALTER TABLE daily_stats ADD COLUMN online_followers INTEGER",
+        ("daily_stats", "breakdowns"):
+            "ALTER TABLE daily_stats ADD COLUMN breakdowns TEXT",
+        ("posts", "follows"):
+            "ALTER TABLE posts ADD COLUMN follows INTEGER",
+        ("posts", "profile_visits"):
+            "ALTER TABLE posts ADD COLUMN profile_visits INTEGER",
+        ("posts", "profile_activity"):
+            "ALTER TABLE posts ADD COLUMN profile_activity INTEGER",
+        ("posts", "profile_activity_breakdown"):
+            "ALTER TABLE posts ADD COLUMN profile_activity_breakdown TEXT",
+        ("posts", "avg_watch_time"):
+            "ALTER TABLE posts ADD COLUMN avg_watch_time INTEGER",
+        ("posts", "total_watch_time"):
+            "ALTER TABLE posts ADD COLUMN total_watch_time INTEGER",
     }
     for (table, column), ddl in migrations.items():
         if table in existing_tables and (table, column) not in existing_columns:

@@ -552,11 +552,10 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
         reposts were never fetched while total_interactions included them —
         reports showed «📤 0» for photos with 195 real shares."""
         client = InstagramClient("user", "token")
-        captured = {}
+        captured = []
 
         async def fake_request(url, params=None):
-            captured["url"] = url
-            captured["params"] = params
+            captured.append({"url": url, "params": params})
             return {"data": [
                 {"name": "reach", "total_value": {"value": 100}},
                 {"name": "shares", "total_value": {"value": 7}},
@@ -566,9 +565,162 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(client, "_request", fake_request):
             result = await client.get_media_insights("media-1", "IMAGE")
 
-        requested = captured["params"]["metric"].split(",")
-        self.assertIn("shares", requested)
+        # The first request carries the base metric set; extended families are
+        # requested separately and may legitimately differ per product type.
+        base_metrics = captured[0]["params"]["metric"].split(",")
+        self.assertIn("shares", base_metrics)
         self.assertEqual(result["shares"], 7)
+
+    async def test_daily_stats_extended_metrics_and_breakdowns(self):
+        """Extended day metrics (probe 2026-10): scalars, breakdown JSON and
+        cumulative provenance must all survive a save."""
+        from datetime import date
+        from services.data_sync import _follow_split
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        breakdowns = {
+            "views": {"follow_type": {"FOLLOWER": 30, "NON_FOLLOWER": 70}},
+            "follows_and_unfollows": {"follow_type": {"FOLLOWS": 5, "UNFOLLOWS": 2}},
+        }
+        with patch.object(crud, "async_session_factory", factory):
+            await crud.save_daily_stats(
+                account_id=1,
+                stats_date=date(2026, 10, 1),
+                followers=100, following=10, media_count=5,
+                reach=200, follower_count=3,
+                views=100, accounts_engaged=40,
+                metrics_present=[
+                    "views", "reach", "reposts", "profile_links_taps",
+                    "follows", "unfollows", "online_followers",
+                ],
+                account_metrics={
+                    "reposts": 4, "profile_links_taps": 9,
+                    "follows": 5, "unfollows": 2, "online_followers": 1500,
+                },
+                breakdowns=breakdowns,
+            )
+            rows = await crud.get_daily_stats(1, date(2026, 10, 1), date(2026, 10, 1))
+
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row.reposts, 4)
+        self.assertEqual(row.profile_links_taps, 9)
+        self.assertEqual(row.follows, 5)
+        self.assertEqual(row.unfollows, 2)
+        self.assertEqual(row.online_followers, 1500)
+        self.assertEqual(json.loads(row.breakdowns)["views"]["follow_type"]["FOLLOWER"], 30)
+        self.assertIn("reposts", json.loads(row.metrics_present))
+        self.assertEqual(_follow_split(breakdowns), (5, 2))
+        # Unknown dimension labels must never be guessed into the scalars.
+        self.assertEqual(
+            _follow_split({"follows_and_unfollows": {"follow_type": {"SOMETHING": 1}}}),
+            (None, None),
+        )
+
+        await engine.dispose()
+
+    async def test_save_posts_extended_fields_preserve_unknown(self):
+        """Extended media metrics: NULL = not measured (product-type dependent)
+        and must neither be zero-coerced nor erased by a partial refresh."""
+        from sqlalchemy import select
+        from database.models import Post
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        with patch.object(crud, "async_session_factory", factory):
+            await crud.save_posts([{
+                "account_id": 1,
+                "instagram_media_id": "m1",
+                "media_type": "IMAGE",
+                "timestamp": datetime(2026, 10, 1, 12, 0),
+                "likes": 10, "comments": 1,
+                "saved": 2, "shares": 3, "reach": 100, "total_interactions": 16,
+                "views": None,
+                "follows": 4, "profile_visits": 21, "profile_activity": 2,
+                "profile_activity_breakdown": '{"bio_link_clicked": 2}',
+                "avg_watch_time": None, "total_watch_time": None,
+                "insights_present": [
+                    "reach", "saved", "shares", "total_interactions",
+                    "follows", "profile_visits", "profile_activity",
+                ],
+            }])
+            # Partial refresh: base metrics only — extended values must survive.
+            await crud.save_posts([{
+                "account_id": 1,
+                "instagram_media_id": "m1",
+                "media_type": "IMAGE",
+                "timestamp": datetime(2026, 10, 1, 12, 0),
+                "likes": 12, "comments": 2,
+                "saved": 2, "shares": 3, "reach": 110, "total_interactions": 18,
+                "views": None,
+                "follows": None, "profile_visits": None, "profile_activity": None,
+                "profile_activity_breakdown": None,
+                "avg_watch_time": None, "total_watch_time": None,
+                "insights_present": ["reach", "saved", "shares", "total_interactions"],
+            }])
+            async with factory() as session:
+                row = (await session.execute(
+                    select(Post).where(Post.instagram_media_id == "m1")
+                )).scalar_one()
+
+        self.assertEqual(row.follows, 4)
+        self.assertEqual(row.profile_visits, 21)
+        self.assertIsNone(row.avg_watch_time)
+        self.assertEqual(row.likes, 12)
+        self.assertEqual(row.reach, 110)
+        self.assertEqual(json.loads(row.profile_activity_breakdown), {"bio_link_clicked": 2})
+        self.assertIn("follows", json.loads(row.insights_present))
+
+        await engine.dispose()
+
+    async def test_audience_snapshots_keep_latest_per_as_of(self):
+        from datetime import date
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        with patch.object(crud, "async_session_factory", factory):
+            await crud.upsert_audience_snapshot(
+                1, "follower", "this_month", "country", date(2026, 10, 1),
+                [{"key": "AZ", "value": 40}],
+            )
+            await crud.upsert_audience_snapshot(
+                1, "follower", "this_month", "country", date(2026, 10, 2),
+                [{"key": "AZ", "value": 42}],
+            )
+            await crud.upsert_audience_snapshot(
+                1, "follower", "this_month", "city", date(2026, 10, 2),
+                [{"key": "Baku", "value": 30}],
+            )
+            # Same-day re-upsert replaces the payload in place.
+            await crud.upsert_audience_snapshot(
+                1, "follower", "this_month", "country", date(2026, 10, 2),
+                [{"key": "AZ", "value": 43}],
+            )
+
+            latest = await crud.get_audience_snapshots(1)
+            by_dimension = {s.dimension: s for s in latest}
+            self.assertEqual(
+                json.loads(by_dimension["country"].payload), [{"key": "AZ", "value": 43}]
+            )
+            self.assertEqual(
+                json.loads(by_dimension["city"].payload), [{"key": "Baku", "value": 30}]
+            )
+
+            at_oct1 = await crud.get_audience_snapshots(1, as_of=date(2026, 10, 1))
+            self.assertEqual(len(at_oct1), 1)
+            self.assertEqual(json.loads(at_oct1[0].payload), [{"key": "AZ", "value": 40}])
+
+        await engine.dispose()
 
     def test_expected_metrics_cover_image_shares(self):
         """If shares are requested for IMAGE, completeness tracking must expect

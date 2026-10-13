@@ -67,6 +67,15 @@ class DailyStats(Base):
     profile_views = Column(Integer, default=0)
     website_clicks = Column(Integer, default=0)
 
+    # Extended account metrics (live-API probe 2026-10): reposts, contact
+    # buttons, follows/unfollows split and the daily online-followers count.
+    reposts = Column(Integer, default=0)
+    follows = Column(Integer, default=0)  # follows_and_unfollows -> follows
+    unfollows = Column(Integer, default=0)  # follows_and_unfollows -> unfollows
+    profile_links_taps = Column(Integer, default=0)  # contact buttons total
+    online_followers = Column(Integer, nullable=True)  # followers online that day
+    breakdowns = Column(Text, nullable=True)  # JSON breakdown sets (see client)
+
     __table_args__ = (
         UniqueConstraint("account_id", "date", name="uq_account_date"),
     )
@@ -102,6 +111,16 @@ class Post(Base):
     # refresh logic in services/data_sync.py. Naive UTC.
     insights_updated_at = Column(DateTime, nullable=True)
     insights_present = Column(Text, nullable=True)  # JSON list; NULL means legacy/unknown
+
+    # Extended media metrics (live-API probe 2026-10). Reels reject the
+    # profile family and feed posts reject watch-time, so every column is
+    # nullable and is only set when Instagram actually returned the metric.
+    follows = Column(Integer, nullable=True)  # new followers from this media
+    profile_visits = Column(Integer, nullable=True)
+    profile_activity = Column(Integer, nullable=True)  # sum of profile actions
+    profile_activity_breakdown = Column(Text, nullable=True)  # JSON action_type
+    avg_watch_time = Column(Integer, nullable=True)  # ms, reels/videos
+    total_watch_time = Column(Integer, nullable=True)  # ms, reels/videos
 
     account = relationship("Account", back_populates="posts")
 
@@ -144,6 +163,33 @@ class Story(Base):
     metrics_present = Column(Text, nullable=True)  # JSON list; NULL means legacy/unknown
 
     account = relationship("Account", back_populates="stories")
+
+
+class AudienceSnapshot(Base):
+    """Demographics of the follower / engaged / reached audience.
+
+    Instagram exposes these as lifetime metrics with a timeframe and top-45
+    buckets. One row per (scope, timeframe, dimension, as_of): reports point at
+    the nearest snapshot at or before the period end.
+    """
+
+    __tablename__ = "audience_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    scope = Column(String(16), nullable=False)  # follower | engaged | reached
+    timeframe = Column(String(16), nullable=False)  # this_month | last_30_days | ...
+    dimension = Column(String(16), nullable=False)  # age_gender | city | country
+    as_of = Column(Date, nullable=False)
+    payload = Column(Text, nullable=False)  # JSON [{"key": ..., "value": n}, ...]
+    collected_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "scope", "timeframe", "dimension", "as_of",
+            name="uq_audience_snapshot",
+        ),
+    )
 
 
 class NotificationDelivery(Base):
