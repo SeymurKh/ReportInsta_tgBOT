@@ -7,7 +7,8 @@ from instagram.client import utc_now_naive
 from services.data_sync import ensure_period_snapshot, sync_account_data
 from analytics.calculations import (
     calculate_period_summary, calculate_content_summary, calculate_stories_summary,
-    get_best_post, get_best_story, detect_trend, top_posts_by_metric,
+    get_best_post, get_best_story, detect_trend, trend_series, trend_text,
+    top_posts_by_metric,
     compare_content_formats, daily_peaks, data_quality_summary, metric_is_present,
     aggregate_breakdowns, audience_split, contact_actions, contact_facts,
     follow_activity, reposts_total, best_post_by_followers, reels_watch_summary,
@@ -23,12 +24,12 @@ from reports.naming import (
     L_STORIES_BACK, L_STORIES_COUNT, L_STORIES_EXIT, L_STORIES_EXITS,
     L_STORIES_FOLLOWS, L_STORIES_FORWARD, L_STORIES_PROFILE, L_STORIES_REACH,
     L_STORIES_REPLIES, L_STORIES_SHARES, L_STORIES_SWIPE, L_STORIES_VIEWS,
-    L_GROWTH_SPEED, L_VIEWS, L_VIEWS_DAILY, PLAIN_WORDS,
+    L_TREND, L_VIEWS, L_VIEWS_DAILY, PLAIN_WORDS,
     L_FOLLOWS, L_FOLLOWS_ONLY, L_UNFOLLOWS_ONLY,
     L_AUDIENCE_SPLIT, L_CONTACT_ACTIONS, L_REPOSTS,
     L_REELS_WATCH, L_BEST_BY_FOLLOWS, CONTACT_BUTTON_NAMES,
     SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_ADVERB,
-    DIVIDER_WIDTH, cmp_row, growth_speed_label, mono_block, table_section,
+    DIVIDER_WIDTH, cmp_row, mono_block, table_section,
 )
 from reports.charts import (
     create_followers_chart, create_metrics_chart,
@@ -360,7 +361,7 @@ async def generate_report(
             f"❤️ {best.likes} | 💬 {best.comments} | 💾 {best.saved} | 📤 {best.shares} | Охват {format_number(best.reach)}\n"
             f"{best.permalink}"
         )
-    trend = detect_trend(stats_list, "follower_count")
+    trend_val = trend_text(trend_series(stats_list))
 
     best_follows_line = ""
     if best_follows_post:
@@ -371,27 +372,10 @@ async def generate_report(
         )
     period_str = format_period(date_from, date_to)
 
-    # Growth speed: average daily follower gain of the last 7 days vs the
-    # 7 days before — the trend is about "now", not about the whole period.
-    values = [getattr(s, "follower_count", 0) or 0 for s in stats_list]
-    growth_speed_val = "н/д"
-    growth_speed_row_label = L_GROWTH_SPEED
-    if trend != "unknown" and len(values) >= 2:
-        speed_window = min(7, max(1, len(values) // 2))
-        growth_speed_row_label = growth_speed_label(speed_window)
-        baseline = values[-2 * speed_window:-speed_window] or values[:1]
-        recent = values[-speed_window:]
-        baseline_avg = sum(baseline) / len(baseline)
-        recent_avg = sum(recent) / len(recent)
-        growth_speed_val = (
-            f"≈{recent_avg:.0f}/день (было ≈{baseline_avg:.0f}) — "
-            f"{TREND_ADVERB.get(trend, trend)}"
-        )
-
     analyzer = get_analyzer()
     if analyzer:
         ai_analysis = await analyzer.analyze_account(
-            period_str, stats_summary, content_summary, best_info, growth_speed_val,
+            period_str, stats_summary, content_summary, best_info, trend_val,
             stories_summary=stories_summary,
             data_quality=data_quality,
             extended={
@@ -461,7 +445,7 @@ async def generate_report(
     followers_rows = [
         (L_FOLLOWERS_NOW, format_number(current_followers) if current_followers is not None else "н/д"),
         (L_FOLLOWERS_GROWTH, growth_val),
-        (growth_speed_row_label, growth_speed_val),
+        (L_TREND, trend_val),
     ]
     if follows_activity:
         followers_rows.append((
@@ -661,7 +645,7 @@ async def generate_report(
         "stories": stories_summary,
         "stories_list": _stories_to_dicts(stories_list),
         "best_post": best_info,
-        "trend": trend,
+        "trend": trend_val,
         "daily_stats": daily_stats_data,
         "publications": publications_data,
         "top_posts": top_posts_by_metric(posts_list),

@@ -142,9 +142,9 @@ def _independent_totals(date_from, date_to, daily_rows, post_rows, story_rows):
             follower_start = None
         elif follower_start > 0:
             follower_pct = round(follower_growth / follower_start * 100, 1)
-    from analytics.calculations import detect_trend
+    from analytics.calculations import trend_series, trend_text
     from types import SimpleNamespace as _NS
-    trend = detect_trend([_NS(**r) for r in daily_rows], "follower_count")
+    trend = trend_text(trend_series([_NS(**r) for r in daily_rows]))
     post_reach = sum((r["reach"] or 0) for r in post_rows)
     post_interactions = sum((r["total_interactions"] or 0) for r in post_rows)
     return {

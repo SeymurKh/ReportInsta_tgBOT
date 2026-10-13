@@ -303,30 +303,96 @@ def data_quality_summary(stats_list: list, expected_days: int | None = None) -> 
     }
 
 
-def detect_trend(stats_list: list, metric: str = "followers", window: int = 7) -> str:
-    if not stats_list:
-        return "unknown"
-    if metric == "follower_count" and not all(
-        metric_is_present(row, metric) for row in stats_list
-    ):
-        return "unknown"
-    if len(stats_list) < 2:
-        return "stable"
-    values = [getattr(s, metric, 0) for s in stats_list]
-    # Compare two adjacent windows. For a one-week report this uses the
-    # first and second half instead of comparing a window to itself.
-    effective_window = min(window, max(1, len(values) // 2))
-    baseline = values[-2 * effective_window:-effective_window]
-    recent = values[-effective_window:]
-    baseline_avg = sum(baseline) / len(baseline)
-    recent_avg = sum(recent) / len(recent)
-    diff_pct = ((recent_avg - baseline_avg) / abs(baseline_avg) * 100) if baseline_avg else 0
+def _theil_sen_slope(values: list[float]) -> float:
+    """Median slope across ALL point pairs of the period (Theil–Sen).
 
-    if diff_pct > 5:
-        return "growing"
-    elif diff_pct < -5:
-        return "declining"
-    return "stable"
+    Robust to outliers: one viral day cannot flip the picture, and every day
+    of the period participates — no window cherry-picking.
+    """
+    slopes = []
+    n = len(values)
+    for i in range(n):
+        for j in range(i + 1, n):
+            slopes.append((values[j] - values[i]) / (j - i))
+    if not slopes:
+        return 0.0
+    slopes.sort()
+    return slopes[len(slopes) // 2]
+
+
+def _mann_kendall(values: list[float]) -> bool:
+    """True when the direction is consistent across the whole period.
+
+    Standard Mann-Kendall criterion: |Z| >= 1.96 (p < 0.05) — the movement is
+    systematic rather than random zigzag.
+    """
+    n = len(values)
+    if n < 4:
+        return False
+    s = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            s += 1 if values[j] > values[i] else (-1 if values[j] < values[i] else 0)
+    var_s = n * (n - 1) * (2 * n + 5) / 18.0
+    if not var_s:
+        return False
+    return abs(s / (var_s ** 0.5)) >= 1.96
+
+
+def trend_series(stats_list: list) -> list[float]:
+    """Whole-period daily series for the follower trend.
+
+    Net daily change (follows − unfollows) where every day measured the split;
+    otherwise gross follows («новые подписчики»).
+    """
+    if not stats_list:
+        return []
+    net_known = all(
+        metric_is_present(row, "follows") and metric_is_present(row, "unfollows")
+        for row in stats_list
+    )
+    series = []
+    for row in stats_list:
+        if net_known:
+            series.append((getattr(row, "follows", 0) or 0) - (getattr(row, "unfollows", 0) or 0))
+        elif metric_is_present(row, "follower_count"):
+            series.append(getattr(row, "follower_count", 0) or 0)
+    return series
+
+
+def detect_trend(values: list) -> dict:
+    """Whole-period trend: direction + per-day pace.
+
+    «Растёт»/«падает» only when the movement is systematic across the whole
+    period (Mann–Kendall); otherwise «стабильный». Returns
+    {"direction": "growing"|"declining"|"stable", "slope": per day,
+    "known": False when the series is too short}.
+    """
+    values = [float(v) for v in values]
+    if len(values) < 3:
+        return {"direction": "stable", "slope": 0.0, "known": False}
+    slope = _theil_sen_slope(values)
+    direction = "stable"
+    if _mann_kendall(values):
+        if slope > 0:
+            direction = "growing"
+        elif slope < 0:
+            direction = "declining"
+    return {"direction": direction, "slope": slope, "known": True}
+
+
+def trend_text(values: list) -> str:
+    """The trend line as shown in reports: «растёт (+0,8/день)», «стабильный»."""
+    from utils.formatters import format_decimal
+
+    info = detect_trend(values)
+    if not info["known"]:
+        return "н/д"
+    if info["direction"] == "stable":
+        return "стабильный"
+    words = {"growing": "растёт", "declining": "падает"}
+    sign = "+" if info["slope"] >= 0 else ""
+    return f"{words[info['direction']]} ({sign}{format_decimal(info['slope'], 1)}/день)"
 
 
 def calculate_stories_summary(stories_list: list) -> dict:

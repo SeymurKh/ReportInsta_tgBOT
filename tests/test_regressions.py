@@ -148,7 +148,7 @@ def _mocked_report(partial=False, api_delay=None, totals=None, analyzer=None):
 
 def test_report_wording_reflects_metric_semantics():
     from reports.naming import (
-        kv_row, L_ACCOUNT_ER, L_GROWTH_SPEED, L_POSTS, L_POST_COMMENTS,
+        kv_row, L_ACCOUNT_ER, L_TREND, L_POSTS, L_POST_COMMENTS,
         L_POST_SAVES, L_POST_SHARES, L_STORIES_EXITS, L_STORIES_EXIT,
         L_STORIES_SWIPE,
     )
@@ -170,8 +170,8 @@ def test_report_wording_reflects_metric_semantics():
     assert "самый высокий отклик на 100 охваченных за период" in text
     assert "балл = " not in text
     # one-day period: no fake «7 дн. к 7 дн.» window claim
-    assert kv_row(L_GROWTH_SPEED, "н/д") in text
-    assert "Скорость роста (7 дн." not in text
+    assert kv_row(L_TREND, "н/д") in text
+    assert "дн. к" not in text  # window-based «x к x» comparisons are gone
     # the composition line adds up to the «all interactions» total: 3024 - 2420
     assert "прочие действия 604" in text
     # header travels with the tables in one message

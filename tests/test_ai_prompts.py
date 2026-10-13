@@ -43,7 +43,7 @@ class AIPromptTests(unittest.IsolatedAsyncioTestCase):
 
         prompt = self.analyzer.client.chat.completions.create.await_args.kwargs["messages"][1]["content"]
         self.assertIn("не обязательно имеет максимальный охват", prompt)
-        self.assertIn("не прирост за весь период", prompt)
+        self.assertIn("по всем дням периода", prompt)
         self.assertIn("Не называй охват выбранного лучшего поста слабым", prompt)
 
     async def test_comparison_prompt_contains_new_data_rules(self):

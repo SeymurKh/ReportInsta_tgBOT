@@ -55,7 +55,7 @@ class FakeStory:
 
 
 def test_follower_trend_is_unknown_without_data():
-    assert detect_trend([], "follower_count") == "unknown"
+    assert detect_trend([])["known"] is False
 
 
 # ── calculate_period_summary ──
@@ -239,29 +239,26 @@ def test_score_post():
 
 
 def test_detect_trend_short_list():
-    assert detect_trend([FakeStats(date(2026, 9, 1))], "followers") == "stable"
+    assert detect_trend([3])["known"] is False
 
 
-def test_detect_trend_uses_two_halves_for_week():
-    stats = [
-        FakeStats(date(2026, 9, day), follower_count=1)
-        for day in range(1, 5)
-    ] + [
-        FakeStats(date(2026, 9, day), follower_count=10)
-        for day in range(5, 8)
-    ]
-    assert detect_trend(stats, "follower_count") == "growing"
+def test_detect_trend_uses_the_whole_period():
+    # strictly growing series -> растёт, with the per-day pace
+    info = detect_trend([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    assert info["direction"] == "growing"
+    assert abs(info["slope"] - 1.0) < 0.01
 
 
-def test_detect_trend_detects_decline_for_short_period():
-    stats = [
-        FakeStats(date(2026, 9, day), follower_count=10)
-        for day in range(1, 5)
-    ] + [
-        FakeStats(date(2026, 9, day), follower_count=1)
-        for day in range(5, 8)
-    ]
-    assert detect_trend(stats, "follower_count") == "declining"
+def test_detect_trend_detects_decline():
+    info = detect_trend([10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
+    assert info["direction"] == "declining"
+    assert info["slope"] < 0
+
+
+def test_detect_trend_flat_noise_is_stable():
+    # zigzag in both directions across the period -> стабильный, no windows
+    info = detect_trend([3, -1, 2, -2, 1, 0, -1, 2, -2, 1, 0, -1])
+    assert info["direction"] == "stable"
 
 
 def test_top_posts_and_format_comparison_are_data_grounded():
