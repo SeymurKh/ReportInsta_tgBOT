@@ -373,8 +373,14 @@ async def _sync_account_data_impl(account, since_dt: datetime, until_dt: datetim
                     account.username, error,
                 )
             if today_followers_delta is None:
-                partial = True
-                partial_reasons.append("Instagram не вернул дневной прирост подписчиков")
+                # Expected, not a problem: Instagram fills the current day's
+                # follower delta with a 24-48h delay (and small accounts under
+                # 100 followers never report it at all). Flagging this as a
+                # partial sync would raise «проблемы актуальности» daily.
+                logger.info(
+                    "Today's follower delta not filled yet for @%s (expected IG delay)",
+                    account.username,
+                )
         else:
             partial = True
             partial_reasons.append("Instagram не вернул общий счётчик подписчиков")
