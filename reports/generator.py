@@ -11,7 +11,7 @@ from analytics.calculations import (
     compare_content_formats, daily_peaks, data_quality_summary, metric_is_present,
     aggregate_breakdowns, audience_split, contact_actions, follow_activity,
     reposts_total, best_post_by_followers, reels_watch_summary,
-    summarize_audience_snapshots,
+    summarize_audience_snapshots, extended_coverage,
 )
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from reports.naming import (
@@ -25,7 +25,7 @@ from reports.naming import (
     L_STORIES_REPLIES, L_STORIES_SHARES, L_STORIES_SWIPE, L_STORIES_VIEWS,
     L_GROWTH_SPEED, L_VIEWS, L_VIEWS_DAILY, PLAIN_WORDS,
     L_FOLLOWS, L_AUDIENCE_SPLIT, L_CONTACT_ACTIONS, L_REPOSTS,
-    L_REELS_WATCH, L_BEST_BY_FOLLOWS,
+    L_REELS_WATCH, L_BEST_BY_FOLLOWS, CONTACT_BUTTON_NAMES,
     SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_ADVERB,
     DIVIDER_WIDTH, cmp_row, growth_speed_label, mono_block, table_section,
 )
@@ -41,12 +41,6 @@ logger = logging.getLogger(__name__)
 TYPE_EMOJI = {"IMAGE": "📷", "VIDEO": "🎬", "CAROUSEL_ALBUM": "📸", "REELS": "🎬"}
 TYPE_NAME = {"IMAGE": "Фото", "VIDEO": "Видео", "CAROUSEL_ALBUM": "Карусель", "REELS": "Reels"}
 WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-# contact_button_type labels (probe 2026-10) — matched case-insensitively
-CONTACT_BUTTON_NAMES = {
-    "DIRECTION": "адрес", "CALL": "звонок", "EMAIL": "почта",
-    "TEXT": "SMS", "BOOK_NOW": "бронь", "INSTANT_EXPERIENCE": "ссылка",
-    "UNDEFINED": "прочее", "BIO_LINK_CLICKED": "ссылка в шапке",
-}
 
 
 def _day_end(value: date) -> datetime:
@@ -541,6 +535,18 @@ async def generate_report(
     if young_days:
         warning_parts.append(
             f"⏳ Данные за {format_period(min(young_days), max(young_days))} ещё уточняются Instagram"
+        )
+    coverage = extended_coverage(stats_list)
+    incomplete = [
+        name for name, days in coverage["per_metric"].items()
+        if 0 < days < coverage["period_days"]
+    ]
+    if incomplete:
+        measured_min = min(coverage["per_metric"][name] for name in incomplete)
+        warning_parts.append(
+            f"⚠️ Новые метрики (подписки/отписки, кнопки связи, репосты) измерены "
+            f"не за все дни периода ({measured_min} из {coverage['period_days']}) — "
+            f"их суммы могут быть занижены"
         )
     warning_parts.extend(
         _data_quality_warnings(data_quality, content_summary, stories_summary, young_days)

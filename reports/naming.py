@@ -64,6 +64,13 @@ L_REPOSTS = "Репосты контента"
 L_REELS_WATCH = "Ср. время просмотра рилса"
 L_BEST_BY_FOLLOWS = "Больше всего подписчиков принёс"
 
+# contact_button_type labels — matched case-insensitively
+CONTACT_BUTTON_NAMES = {
+    "DIRECTION": "адрес", "CALL": "звонок", "EMAIL": "почта",
+    "TEXT": "SMS", "BOOK_NOW": "бронь", "INSTANT_EXPERIENCE": "ссылка",
+    "UNDEFINED": "прочее", "BIO_LINK_CLICKED": "ссылка в шапке",
+}
+
 # ── Comparison extras ──
 L_VIEWS_DAILY = "Просмотры в день"
 L_ENGAGED_DAILY = "Вовлечённые в день (итог ÷ дни)"

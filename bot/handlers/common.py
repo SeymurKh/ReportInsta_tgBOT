@@ -93,13 +93,9 @@ async def cmd_audience(message: Message):
                 f"−{format_number(follows['unfollows'])}"
             )
         if contacts and contacts.get("total"):
-            button_names = {
-                "DIRECTION": "адрес", "CALL": "звонок", "EMAIL": "почта",
-                "TEXT": "SMS", "BOOK_NOW": "бронь", "INSTANT_EXPERIENCE": "ссылка",
-                "UNDEFINED": "прочее", "BIO_LINK_CLICKED": "ссылка в шапке",
-            }
+            from reports.naming import CONTACT_BUTTON_NAMES
             buttons = " · ".join(
-                f"{button_names.get(str(key).upper(), key)} {format_number(value)}"
+                f"{CONTACT_BUTTON_NAMES.get(str(key).upper(), key)} {format_number(value)}"
                 for key, value in sorted(contacts["buttons"].items(), key=lambda kv: -kv[1])
             )
             lines.append(

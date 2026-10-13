@@ -296,6 +296,42 @@ def test_daily_peaks_and_quality_summary():
     }
 
 
+def test_contact_actions_agree_and_coverage_is_reported():
+    from types import SimpleNamespace
+    import json as _json
+    from analytics.calculations import contact_actions, extended_coverage
+
+    def row(d, scalar, breakdown, present):
+        return SimpleNamespace(
+            date=d, metrics_present=_json.dumps(present),
+            profile_links_taps=scalar, follows=0, unfollows=0, reposts=0,
+            breakdowns=_json.dumps(breakdown) if breakdown else None,
+        )
+
+    ok = row(date(2026, 10, 1), 5,
+             {"profile_links_taps": {"contact_button_type": {"DIRECTION": 3, "CALL": 2}}},
+             ["profile_links_taps", "follows"])
+    assert contact_actions([ok]) == {"total": 5, "buttons": {"DIRECTION": 3, "CALL": 2}}
+
+    # Contradictory sources (partial fetch): scalar wins, split is hidden
+    bad = row(date(2026, 10, 2), 5,
+              {"profile_links_taps": {"contact_button_type": {"DIRECTION": 50}}},
+              ["profile_links_taps", "follows"])
+    assert contact_actions([bad]) == {"total": 5, "buttons": {}}
+
+    # Breakdown-only day: the split becomes the source of truth
+    only_bd = row(date(2026, 10, 3), 0,
+                  {"profile_links_taps": {"contact_button_type": {"EMAIL": 4}}}, [])
+    assert contact_actions([only_bd]) == {"total": 4, "buttons": {"EMAIL": 4}}
+
+    unmeasured = row(date(2026, 10, 4), 0, None, [])
+    cov = extended_coverage([ok, bad, unmeasured])
+    assert cov["period_days"] == 3
+    assert cov["per_metric"]["profile_links_taps"] == 2
+    assert cov["per_metric"]["follows"] == 2
+    assert cov["per_metric"]["reposts"] == 0
+
+
 def test_corrupt_metric_metadata_is_reported_as_unknown_not_crashed():
     row = FakeStats(date(2026, 9, 1))
     row.metrics_present = "{invalid-json"

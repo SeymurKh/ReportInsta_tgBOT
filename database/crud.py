@@ -309,6 +309,32 @@ def _merge_metrics_present(existing_raw: str | None, new_metrics) -> str | None:
     return json.dumps(sorted(merged))
 
 
+def _merge_breakdowns(existing_raw: str | None, new: dict | None) -> str | None:
+    """Deep-merge breakdown sets: a partial re-fetch must not erase dimensions
+    seen earlier (same policy as metrics_present). Values are absolute day
+    values, so the same dimension key is overwritten by the fresher reading."""
+    if not new:
+        return existing_raw
+    merged: dict = {}
+    if existing_raw:
+        try:
+            decoded = json.loads(existing_raw)
+        except (TypeError, ValueError):
+            decoded = None
+        if isinstance(decoded, dict):
+            merged = decoded
+    for metric, breakdowns in new.items():
+        if not isinstance(breakdowns, dict):
+            continue
+        for breakdown, values in breakdowns.items():
+            if not isinstance(values, dict):
+                continue
+            bucket = merged.setdefault(metric, {}).setdefault(breakdown, {})
+            for key, value in values.items():
+                bucket[key] = value
+    return json.dumps(merged, ensure_ascii=False, sort_keys=True)
+
+
 # Account-level metric columns persisted per day bucket
 ACCOUNT_METRIC_FIELDS = (
     "likes", "comments", "saves", "shares", "replies",
@@ -366,8 +392,7 @@ async def save_daily_stats(
                     setattr(row, field, value)
             if metrics_present is not None:
                 row.metrics_present = _merge_metrics_present(row.metrics_present, metrics_present)
-            if breakdowns:
-                row.breakdowns = json.dumps(breakdowns, ensure_ascii=False, sort_keys=True)
+            row.breakdowns = _merge_breakdowns(row.breakdowns, breakdowns)
         else:
             session.add(DailyStats(
                 account_id=account_id, date=stats_date,
@@ -380,8 +405,7 @@ async def save_daily_stats(
                 bucket_start=bucket_start,
                 bucket_end=bucket_end,
                 **{field: (account_metrics or {}).get(field) or 0 for field in ACCOUNT_METRIC_FIELDS},
-                breakdowns=(json.dumps(breakdowns, ensure_ascii=False, sort_keys=True)
-                            if breakdowns else None),
+                breakdowns=_merge_breakdowns(None, breakdowns),
                 metrics_present=(json.dumps(sorted(set(metrics_present)))
                                  if metrics_present is not None else None),
             ))

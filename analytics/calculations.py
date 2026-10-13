@@ -463,7 +463,10 @@ def contact_actions(stats_list: list) -> dict | None:
     """Aggregated contact-button taps with presence semantics.
 
     Returns {"total": n, "buttons": {label: n}} or None when the metric was
-    never measured in the period (fresh zero != real zero).
+    never measured in the period (fresh zero != real zero). The scalar total
+    and the button breakdown come from different API requests: when they
+    disagree (a partial fetch) the scalar wins and the split is hidden rather
+    than shown next to contradictory numbers.
     """
     measured = [row for row in stats_list if metric_is_present(row, "profile_links_taps")]
     entry = aggregate_breakdowns(stats_list).get("profile_links_taps", {}).get(
@@ -476,7 +479,30 @@ def contact_actions(stats_list: list) -> dict | None:
         key: value for key, value in (entry or {}).items()
         if isinstance(value, (int, float)) and value
     }
+    buttons_sum = sum(buttons.values())
+    if not total:
+        total = buttons_sum
+    elif buttons_sum and buttons_sum != total:
+        buttons = {}
     return {"total": total, "buttons": buttons}
+
+
+EXTENDED_SUM_METRICS = ("profile_links_taps", "follows", "unfollows", "reposts")
+
+
+def extended_coverage(stats_list: list) -> dict:
+    """Measured-day coverage for the summed extended metrics.
+
+    Sums over a partially measured period silently undercount, so reports
+    disclose «N из M дней» instead of pretending a full period.
+    """
+    return {
+        "period_days": len(stats_list),
+        "per_metric": {
+            name: sum(1 for row in stats_list if metric_is_present(row, name))
+            for name in EXTENDED_SUM_METRICS
+        },
+    }
 
 
 def follow_activity(stats_list: list) -> dict | None:

@@ -722,6 +722,43 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
         await engine.dispose()
 
+    async def test_daily_stats_breakdowns_merge_on_partial_refetch(self):
+        """A partial breakdown re-fetch must not erase dimensions seen earlier."""
+        from datetime import date
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        full = {
+            "views": {"follow_type": {"FOLLOWER": 30, "NON_FOLLOWER": 70}},
+            "profile_links_taps": {"contact_button_type": {"DIRECTION": 6}},
+        }
+        partial = {"views": {"follow_type": {"FOLLOWER": 31, "NON_FOLLOWER": 71}}}
+        with patch.object(crud, "async_session_factory", factory):
+            await crud.save_daily_stats(
+                account_id=1, stats_date=date(2026, 10, 1),
+                followers=100, following=10, media_count=5,
+                reach=200, follower_count=3, views=100, accounts_engaged=40,
+                metrics_present=["views", "reach"], breakdowns=full,
+            )
+            await crud.save_daily_stats(
+                account_id=1, stats_date=date(2026, 10, 1),
+                followers=None, following=None, media_count=None,
+                reach=210, follower_count=3, views=None, accounts_engaged=None,
+                metrics_present=["reach"], breakdowns=partial,
+            )
+            rows = await crud.get_daily_stats(1, date(2026, 10, 1), date(2026, 10, 1))
+
+        merged = json.loads(rows[0].breakdowns)
+        # same dimension key -> fresher value wins
+        assert merged["views"]["follow_type"] == {"FOLLOWER": 31, "NON_FOLLOWER": 71}
+        # untouched dimensions survive the partial re-fetch
+        assert merged["profile_links_taps"]["contact_button_type"] == {"DIRECTION": 6}
+
+        await engine.dispose()
+
     def test_expected_metrics_cover_image_shares(self):
         """If shares are requested for IMAGE, completeness tracking must expect
         them too — otherwise every photo is flagged as having missing metrics."""
