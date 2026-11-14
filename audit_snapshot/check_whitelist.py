@@ -1,14 +1,16 @@
 """Verify the running bot's parsed whitelist (read-only on server)."""
 import os
+import sys
 
-import paramiko
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-PASSWORD = os.environ["SERVER_SSH_PASSWORD"]
+from audit_snapshot.ssh import connect
+
 CMD = "cd /opt/reportinsta && .venv/bin/python -c \"from config import settings; print(sorted(settings.ALLOWED_TELEGRAM_USERNAMES))\""
 
-client = paramiko.SSHClient()
-client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-client.connect("49.13.20.118", username="root", password=PASSWORD, timeout=30)
+client = connect()
 try:
     _, out, err = client.exec_command(CMD)
     print("parsed whitelist:", out.read().decode("utf-8", "replace").strip())

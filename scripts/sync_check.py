@@ -23,7 +23,7 @@ async def main(days: int, only_accounts: str | None) -> None:
     for acc in settings.ACCOUNTS:
         await crud.save_or_update_account(
             instagram_user_id=acc["user_id"],
-            username=acc["name"],
+            username=acc.get("username") or acc["name"],
             name=acc["name"],
             access_token=acc["access_token"],
         )

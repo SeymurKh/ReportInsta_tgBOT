@@ -140,10 +140,10 @@ def calculate_content_summary(posts_list: list) -> dict:
     component_interactions = total_likes + total_comments + total_saves + total_shares
 
     expected_metrics = {
-        "IMAGE": {"reach", "saved", "shares", "total_interactions"},
+        "IMAGE": {"reach", "views", "saved", "shares", "total_interactions"},
         "VIDEO": {"reach", "saved", "shares", "total_interactions", "views"},
         "REELS": {"reach", "saved", "shares", "total_interactions", "views"},
-        "CAROUSEL_ALBUM": {"reach", "saved", "shares", "total_interactions"},
+        "CAROUSEL_ALBUM": {"reach", "views", "saved", "shares", "total_interactions"},
     }
     known_posts = [p for p in posts_list if getattr(p, "insights_present", None) is not None]
     missing_insight_metrics = {name: 0 for name in {m for group in expected_metrics.values() for m in group}}
@@ -269,7 +269,12 @@ def data_quality_summary(stats_list: list, expected_days: int | None = None) -> 
     partial_days = sum(1 for row in stats_list if getattr(row, "is_partial", False))
     available_days = len(stats_list)
     missing_days = max(expected_days - available_days, 0) if expected_days is not None else None
-    metric_names = ("reach", "follower_count", "views", "accounts_engaged")
+    core_metric_names = ("reach", "follower_count", "views", "accounts_engaged")
+    extended_metric_names = (
+        "likes", "comments", "saves", "shares", "replies", "total_interactions",
+        "profile_views", "website_clicks", "reposts", "follows", "unfollows",
+        "profile_links_taps", "online_followers",
+    )
     parsed_presence = {id(row): _metrics_present(row) for row in stats_list}
     presence = {key: value for key, value in parsed_presence.items() if value is not None}
     legacy_unknown_days = sum(1 for value in parsed_presence.values() if value is None)
@@ -278,13 +283,25 @@ def data_quality_summary(stats_list: list, expected_days: int | None = None) -> 
         if getattr(row, "metrics_present", None) is not None
         and parsed_presence[id(row)] is None
     )
-    metric_missing_days = {
-        metric: sum(
-            1 for row in stats_list
-            if id(row) in presence and metric not in presence[id(row)]
-        )
-        for metric in metric_names
-    }
+    # Extended metrics are optional (account type / API support). Check only
+    # those measured at least once; a metric the API never returns must not be
+    # reported as «missing» on every day. Partial days are disclosed separately
+    # (partial_days), so they do not add extended-metric noise.
+    metric_names = list(core_metric_names) + [
+        metric for metric in extended_metric_names
+        if any(metric in values for values in presence.values())
+    ]
+    metric_missing_days = {}
+    for metric in metric_names:
+        missing = 0
+        for row in stats_list:
+            values = presence.get(id(row))
+            if values is None or metric in values:
+                continue
+            if metric not in core_metric_names and getattr(row, "is_partial", False):
+                continue
+            missing += 1
+        metric_missing_days[metric] = missing
     return {
         "available_days": available_days,
         "expected_days": expected_days,
@@ -303,17 +320,28 @@ def data_quality_summary(stats_list: list, expected_days: int | None = None) -> 
     }
 
 
-def _theil_sen_slope(values: list[float]) -> float:
+def _trend_points(values) -> list[tuple[int, float]]:
+    """(day_index, value) pairs; plain lists keep their natural indices."""
+    if values and isinstance(values[0], (tuple, list)):
+        return [(int(point[0]), float(point[1])) for point in values]
+    return [(index, float(value)) for index, value in enumerate(values)]
+
+
+def _theil_sen_slope(values) -> float:
     """Median slope across ALL point pairs of the period (Theil–Sen).
 
     Robust to outliers: one viral day cannot flip the picture, and every day
-    of the period participates — no window cherry-picking.
+    of the period participates — no window cherry-picking. Points carry the
+    real day index, so a skipped day cannot compress the time axis.
     """
+    points = _trend_points(values)
     slopes = []
-    n = len(values)
+    n = len(points)
     for i in range(n):
         for j in range(i + 1, n):
-            slopes.append((values[j] - values[i]) / (j - i))
+            dx = points[j][0] - points[i][0]
+            if dx:
+                slopes.append((points[j][1] - points[i][1]) / dx)
     if not slopes:
         return 0.0
     slopes.sort()
@@ -339,11 +367,12 @@ def _mann_kendall(values: list[float]) -> bool:
     return abs(s / (var_s ** 0.5)) >= 1.96
 
 
-def trend_series(stats_list: list) -> list[float]:
-    """Whole-period daily series for the follower trend.
+def trend_series(stats_list: list) -> list[tuple[int, float]]:
+    """Whole-period daily series for the follower trend as (day_index, value).
 
     Net daily change (follows − unfollows) where every day measured the split;
-    otherwise gross follows («новые подписчики»).
+    otherwise gross follows («новые подписчики»). Days without a measured
+    value are skipped, but their index is preserved so the slope stays honest.
     """
     if not stats_list:
         return []
@@ -352,11 +381,11 @@ def trend_series(stats_list: list) -> list[float]:
         for row in stats_list
     )
     series = []
-    for row in stats_list:
+    for index, row in enumerate(stats_list):
         if net_known:
-            series.append((getattr(row, "follows", 0) or 0) - (getattr(row, "unfollows", 0) or 0))
+            series.append((index, (getattr(row, "follows", 0) or 0) - (getattr(row, "unfollows", 0) or 0)))
         elif metric_is_present(row, "follower_count"):
-            series.append(getattr(row, "follower_count", 0) or 0)
+            series.append((index, getattr(row, "follower_count", 0) or 0))
     return series
 
 
@@ -364,16 +393,18 @@ def detect_trend(values: list) -> dict:
     """Whole-period trend: direction + per-day pace.
 
     «Растёт»/«падает» only when the movement is systematic across the whole
-    period (Mann–Kendall); otherwise «стабильный». Returns
+    period (Mann–Kendall); otherwise «стабильный». Accepts either plain values
+    or (day_index, value) pairs. Returns
     {"direction": "growing"|"declining"|"stable", "slope": per day,
     "known": False when the series is too short}.
     """
-    values = [float(v) for v in values]
-    if len(values) < 3:
+    points = _trend_points(values)
+    raw = [value for _index, value in points]
+    if len(raw) < 3:
         return {"direction": "stable", "slope": 0.0, "known": False}
-    slope = _theil_sen_slope(values)
+    slope = _theil_sen_slope(points)
     direction = "stable"
-    if _mann_kendall(values):
+    if _mann_kendall(raw):
         if slope > 0:
             direction = "growing"
         elif slope < 0:
@@ -393,6 +424,9 @@ def trend_text(values: list) -> str:
     words = {"growing": "растёт", "declining": "падает"}
     sign = "+" if info["slope"] >= 0 else ""
     return f"{words[info['direction']]} ({sign}{format_decimal(info['slope'], 1)}/день)"
+
+
+STORY_NAVIGATION_METRICS = {"tap_forward", "tap_back", "tap_exit", "swipe_forward"}
 
 
 def calculate_stories_summary(stories_list: list) -> dict:
@@ -428,6 +462,10 @@ def calculate_stories_summary(stories_list: list) -> dict:
         except (TypeError, ValueError):
             present_names = set()
         missing = story_metric_names - present_names
+        if present_names & STORY_NAVIGATION_METRICS:
+            # Instagram omits zero-valued navigation actions; if the block was
+            # fetched at all, the missing actions are known zeros.
+            missing -= STORY_NAVIGATION_METRICS
         if missing:
             partial_insights_stories += 1
             for metric in missing:
@@ -500,6 +538,24 @@ def aggregate_breakdowns(stats_list: list) -> dict:
     return totals
 
 
+def breakdown_coverage(stats_list: list, metric: str, breakdown: str) -> tuple[int, int] | None:
+    """(days with this breakdown, measured days) — None when nothing measured.
+
+    Breakdowns are collected best-effort: a failed request must not look like a
+    real zero, so reports disclose partial coverage instead of silently
+    undercounting the split.
+    """
+    measured = [row for row in stats_list if _metrics_present(row) is not None]
+    if not measured:
+        return None
+    covered = 0
+    for row in measured:
+        entry = _row_breakdowns(row).get(metric, {}).get(breakdown)
+        if isinstance(entry, dict) and entry:
+            covered += 1
+    return covered, len(measured)
+
+
 def audience_split(breakdowns: dict, metric: str = "views") -> dict | None:
     """Follower / non-follower split for a metric.
 
@@ -524,6 +580,52 @@ def audience_split(breakdowns: dict, metric: str = "views") -> dict | None:
     if not seen:
         return None
     return {"followers": followers, "non_followers": non_followers}
+
+
+def product_type_split(breakdowns: dict, metric: str = "views") -> dict | None:
+    """Views/reach split by media product type (POST/REEL/STORY/...).
+
+    The API returns up to five buckets; only non-zero values are kept so the
+    report never prints a meaningless zero row.
+    """
+    entry = breakdowns.get(metric, {}).get("media_product_type")
+    if not isinstance(entry, dict) or not entry:
+        return None
+    result = {
+        str(key).upper(): value for key, value in entry.items()
+        if isinstance(value, (int, float)) and value
+    }
+    return result or None
+
+
+def profile_activity_summary(posts: list) -> dict | None:
+    """Profile activity produced by publications (visits, actions, breakdown)."""
+    measured = [
+        post for post in posts
+        if getattr(post, "profile_visits", None) is not None
+        or (getattr(post, "profile_activity", None) or 0)
+    ]
+    if not measured:
+        return None
+    breakdown: dict = {}
+    for post in measured:
+        raw = getattr(post, "profile_activity_breakdown", None)
+        if not raw:
+            continue
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(decoded, dict):
+            continue
+        for key, value in decoded.items():
+            if isinstance(value, (int, float)) and value:
+                breakdown[key] = breakdown.get(key, 0) + value
+    visits = sum((getattr(post, "profile_visits", 0) or 0) for post in measured)
+    activity = sum((getattr(post, "profile_activity", 0) or 0) for post in measured)
+    if not visits and not activity:
+        return None
+    return {"visits": visits, "activity": activity, "breakdown": breakdown}
 
 
 def contact_facts(total: int | None, buttons: dict | None) -> dict | None:
@@ -606,8 +708,8 @@ def reels_watch_summary(posts: list) -> dict | None:
     }
 
 
-def summarize_audience_snapshots(snapshots: list) -> dict:
-    """Compact demographics: {scope: {dimension: [(key, value), ...]}} top-5."""
+def summarize_audience_snapshots(snapshots: list, limit: int = 5) -> dict:
+    """Compact demographics: {scope: {dimension: [(key, value), ...]}} top-`limit`."""
     result: dict = {}
     for snap in snapshots:
         try:
@@ -621,7 +723,7 @@ def summarize_audience_snapshots(snapshots: list) -> dict:
              if isinstance(item, dict) and isinstance(item.get("value"), (int, float)) and item["value"]),
             key=lambda item: item["value"],
             reverse=True,
-        )[:5]
+        )[:limit]
         if items:
             result.setdefault(snap.scope, {})[snap.dimension] = [
                 (str(item.get("key", "")), item["value"]) for item in items

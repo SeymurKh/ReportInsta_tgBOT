@@ -154,6 +154,10 @@ def _apply_lightweight_migrations(sync_conn) -> None:
             "ALTER TABLE period_snapshots ADD COLUMN profile_links_taps INTEGER",
         ("period_snapshots", "reposts"):
             "ALTER TABLE period_snapshots ADD COLUMN reposts INTEGER",
+        ("period_snapshots", "replies"):
+            "ALTER TABLE period_snapshots ADD COLUMN replies INTEGER",
+        ("period_snapshots", "website_clicks"):
+            "ALTER TABLE period_snapshots ADD COLUMN website_clicks INTEGER",
         ("period_snapshots", "follows"):
             "ALTER TABLE period_snapshots ADD COLUMN follows INTEGER",
         ("period_snapshots", "unfollows"):
@@ -164,3 +168,19 @@ def _apply_lightweight_migrations(sync_conn) -> None:
     for (table, column), ddl in migrations.items():
         if table in existing_tables and (table, column) not in existing_columns:
             sync_conn.execute(text(ddl))
+    # Range queries (report windows) need explicit indexes: unique constraints
+    # only cover their own key order.
+    index_statements = (
+        ("posts",
+         "CREATE INDEX IF NOT EXISTS ix_posts_account_timestamp"
+         " ON posts (account_id, timestamp)"),
+        ("stories",
+         "CREATE INDEX IF NOT EXISTS ix_stories_account_timestamp"
+         " ON stories (account_id, timestamp)"),
+        ("sync_runs",
+         "CREATE INDEX IF NOT EXISTS ix_sync_runs_account_started"
+         " ON sync_runs (account_id, started_at)"),
+    )
+    for table, statement in index_statements:
+        if table in existing_tables:
+            sync_conn.execute(text(statement))

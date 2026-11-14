@@ -1,7 +1,7 @@
 from datetime import datetime, date, timezone
 from sqlalchemy import (
     Column, Integer, BigInteger, String, Text, Boolean, Date, DateTime,
-    ForeignKey, UniqueConstraint
+    ForeignKey, UniqueConstraint, Index
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -122,6 +122,10 @@ class Post(Base):
     avg_watch_time = Column(Integer, nullable=True)  # ms, reels/videos
     total_watch_time = Column(Integer, nullable=True)  # ms, reels/videos
 
+    __table_args__ = (
+        Index("ix_posts_account_timestamp", "account_id", "timestamp"),
+    )
+
     account = relationship("Account", back_populates="posts")
 
 
@@ -161,6 +165,10 @@ class Story(Base):
     is_active = Column(Boolean, default=True)
     insights_updated_at = Column(DateTime, nullable=True)
     metrics_present = Column(Text, nullable=True)  # JSON list; NULL means legacy/unknown
+
+    __table_args__ = (
+        Index("ix_stories_account_timestamp", "account_id", "timestamp"),
+    )
 
     account = relationship("Account", back_populates="stories")
 
@@ -229,6 +237,8 @@ class PeriodSnapshot(Base):
     shares = Column(Integer, nullable=True)
     total_interactions = Column(Integer, nullable=True)
     profile_views = Column(Integer, nullable=True)
+    replies = Column(Integer, nullable=True)
+    website_clicks = Column(Integer, nullable=True)
     # Extended metrics (probe 2026-10): period totals keep reports honest for
     # any window even when day-level collection has gaps.
     profile_links_taps = Column(Integer, nullable=True)
@@ -262,6 +272,10 @@ class SyncRun(Base):
     until_date = Column(Date, nullable=True)
     api_delay_days = Column(Integer, default=0, nullable=False)
     is_partial = Column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        Index("ix_sync_runs_account_started", "account_id", "started_at"),
+    )
 
 
 class SyncLease(Base):

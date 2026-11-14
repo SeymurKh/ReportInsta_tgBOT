@@ -723,7 +723,7 @@ async def get_posts(
 
 PERIOD_SNAPSHOT_METRICS = (
     "reach", "accounts_engaged", "views", "likes", "comments", "saves",
-    "shares", "total_interactions", "profile_views",
+    "shares", "total_interactions", "profile_views", "replies", "website_clicks",
     "profile_links_taps", "reposts", "follows", "unfollows",
 )
 

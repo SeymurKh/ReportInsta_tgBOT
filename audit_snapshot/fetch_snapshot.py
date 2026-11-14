@@ -1,7 +1,8 @@
 """Fetch a consistent read-only snapshot of the production DB (read-only on server).
 
-Security: the SSH password comes from the SERVER_SSH_PASSWORD env var and is
-never written to disk. The server-side temp snapshot is deleted after download.
+Security: credentials come from the SSH key (~/.ssh/reportinsta_ed25519) or the
+SERVER_SSH_PASSWORD env var and are never written to disk by these scripts.
+Server-side temp snapshots are deleted after download.
 
 Actions on the server (all read-only except a temp copy in /tmp):
 1. Inventory: pragma checks, table counts, data ranges, last sync runs.
@@ -13,11 +14,12 @@ import json
 import os
 import sys
 
-import paramiko
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-HOST = "49.13.20.118"
-USER = "root"
-PASSWORD = os.environ["SERVER_SSH_PASSWORD"]
+from audit_snapshot.ssh import HOST, USER, connect
+
 REMOTE_DB = "/opt/reportinsta/data/instagram_bot.db"
 REMOTE_ENV = "/opt/reportinsta/.env"
 REMOTE_LOG = "/opt/reportinsta/logs/bot.log"
@@ -76,9 +78,7 @@ def run(client, script, label):
 
 
 def main():
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(HOST, username=USER, password=PASSWORD, timeout=30)
+    client = connect()
     sftp = client.open_sftp()
     try:
         inventory = run(client, INVENTORY, "inventory")
@@ -89,7 +89,10 @@ def main():
         print(run(client, SNAPSHOT, "snapshot").strip())
         sftp.get(REMOTE_SNAP, LOCAL_SNAP)
         print(f"downloaded: {LOCAL_SNAP} ({os.path.getsize(LOCAL_SNAP)} bytes)")
-        run(client, "rm -f /tmp/reportinsta_audit_snap.db", "cleanup")
+        # Shell command, not a Python script: the snapshot is a file, not code.
+        _, _, cleanup_err = client.exec_command(f"rm -f {REMOTE_SNAP}")
+        cleanup_err.read()
+        print("remote temp snapshot removed")
 
         # Log tail (read-only) — recent errors/health of the live bot.
         try:

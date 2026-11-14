@@ -5,12 +5,13 @@ pattern) and never printed. Compare output is equality-only.
 """
 import json
 import os
+import sys
 
-import paramiko
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-HOST = "49.13.20.118"
-USER = "root"
-PASSWORD = os.environ["SERVER_SSH_PASSWORD"]
+from audit_snapshot.ssh import connect
 
 LOCAL_DIR = os.path.dirname(os.path.abspath(__file__))
 SERVER_ENV_PATH = os.path.join(LOCAL_DIR, ".env")
@@ -28,9 +29,7 @@ def field(text, name):
 
 
 def main():
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(HOST, username=USER, password=PASSWORD, timeout=30)
+    client = connect()
     sftp = client.open_sftp()
     try:
         # Proper shell cleanup of the server-side temp snapshot.

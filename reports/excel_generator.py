@@ -8,6 +8,9 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
+from analytics.calculations import audience_split
+from reports.naming import PRODUCT_TYPE_NAMES, demographic_label
+
 
 NAVY = "17365D"
 BLUE = "2196F3"
@@ -166,6 +169,8 @@ def generate_excel_report(
             ("Сохранения (аккаунт)", stats_summary.get("saves_total", "—")),
             ("Репосты (аккаунт)", stats_summary.get("shares_total", "—")),
             ("Просмотры профиля", stats_summary.get("profile_views_total", "—")),
+            ("Переходы по ссылке", stats_summary.get("website_clicks_total", "—")),
+            ("Ответы (аккаунт)", stats_summary.get("replies_total", "—")),
             ("Ср. охват/день", stats_summary.get("reach_avg_daily", "—")),
         ]),
         ("Контент", [
@@ -181,6 +186,34 @@ def generate_excel_report(
             ("Разница Insights − сумма действий", content_summary.get("interaction_gap", 0)),
         ]),
     ]
+    extra_rows = []
+    product_views = stats_summary.get("product_views_total")
+    if product_views:
+        extra_rows.append((
+            "Просмотры по форматам",
+            ", ".join(
+                f"{PRODUCT_TYPE_NAMES.get(key, key)} {value}"
+                for key, value in product_views.items()
+            ),
+        ))
+    product_reach = stats_summary.get("product_reach_total")
+    if product_reach:
+        extra_rows.append((
+            "Охват по форматам",
+            ", ".join(
+                f"{PRODUCT_TYPE_NAMES.get(key, key)} {value}"
+                for key, value in product_reach.items()
+            ),
+        ))
+    profile_activity = stats_summary.get("post_profile_activity")
+    if profile_activity:
+        detail = f"визиты в профиль {profile_activity['visits']}"
+        directions = (profile_activity.get("breakdown") or {}).get("direction")
+        if directions:
+            detail += f", маршруты {directions}"
+        extra_rows.append(("Действия из публикаций", detail))
+    if extra_rows:
+        sections.append(("Форматы и профиль", extra_rows))
     for title, items in sections:
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
         ws.cell(row=row, column=1, value=title)
@@ -355,7 +388,7 @@ def generate_excel_report(
                     f"{scope_names.get(scope, scope)} — {dimension_names.get(dimension, dimension)}"
                 )
                 for key, value in items:
-                    _audience_row(str(key), value)
+                    _audience_row(demographic_label(key), value)
         ws_a.freeze_panes = "A4"
 
     # AI dialogue.
@@ -407,6 +440,44 @@ def generate_excel_report(
                     ws_cmp.cell(row=row, column=2).number_format = PERCENT_FORMAT
                     ws_cmp.cell(row=row, column=3).number_format = PERCENT_FORMAT
                 row += 1
+        extended_rows = [
+            ("Подписки", "follows_total"),
+            ("Отписки", "unfollows_total"),
+            ("Кнопки связи", "profile_links_taps_total"),
+            ("Репосты контента", "reposts_total"),
+            ("Ответы (аккаунт)", "replies_total"),
+            ("Переходы по ссылке", "website_clicks_total"),
+        ]
+        ws_cmp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+        ws_cmp.cell(row=row, column=1, value="Аудитория и расширенное")
+        _ss(ws_cmp.cell(row=row, column=1))
+        for col in range(1, 4):
+            ws_cmp.cell(row=row, column=col).border = THIN_BORDER
+        row += 1
+        for label, key in extended_rows:
+            v1 = p1.get("stats", {}).get(key)
+            v2 = p2.get("stats", {}).get(key)
+            ws_cmp.cell(row=row, column=1, value=label)
+            ws_cmp.cell(row=row, column=2, value=v1 if v1 is not None else "—")
+            ws_cmp.cell(row=row, column=3, value=v2 if v2 is not None else "—")
+            _style_body(ws_cmp, row, row, 1, 3)
+            row += 1
+        split1 = audience_split(p1.get("stats", {}).get("breakdowns_total") or {}, "views")
+        split2 = audience_split(p2.get("stats", {}).get("breakdowns_total") or {}, "views")
+
+        def _split_text(split):
+            if not split:
+                return "—"
+            total = split["followers"] + split["non_followers"]
+            if not total:
+                return "—"
+            return f"{split['followers'] / total * 100:.1f}% / {split['non_followers'] / total * 100:.1f}%"
+
+        ws_cmp.cell(row=row, column=1, value="Подписчики / неподписчики (просмотры)")
+        ws_cmp.cell(row=row, column=2, value=_split_text(split1))
+        ws_cmp.cell(row=row, column=3, value=_split_text(split2))
+        _style_body(ws_cmp, row, row, 1, 3)
+        row += 1
         if comparison_period_days:
             ws_cmp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
             ws_cmp.cell(row=row, column=1, value="Средние значения за день")

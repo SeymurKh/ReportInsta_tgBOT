@@ -551,9 +551,12 @@ async def _audit_edge_cases(conn, username):
     empty_from, empty_to = max_date - timedelta(days=40), max_date - timedelta(days=35)
     if not any(empty_from <= r.date <= empty_to for r in daily):
         generated = await _generate_report(account, [], None, [], [], empty_from, empty_to)
+        # An empty period must render gracefully AND stay honest: a metric that
+        # was never measured is «н/д» (None), never a fake zero.
         checks["empty_period_renders"] = (
             "ПУБЛИКАЦИИ (0)" in generated["text"]
-            and generated["context"]["stats"]["reach_total"] == 0
+            and "Нет публикаций за период" in generated["text"]
+            and generated["context"]["stats"]["reach_total"] is None
         )
     else:
         checks["empty_period_renders"] = True

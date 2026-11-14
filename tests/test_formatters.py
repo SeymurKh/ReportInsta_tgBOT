@@ -207,6 +207,31 @@ def test_ai_context_disclaimer_present():
     assert "Маркер «опущено…» означает сокращение контекста диалога, а не неполноту" in text
 
 
+def test_ai_context_includes_formats_profile_activity_and_demographics():
+    ctx = _big_report_context(days=2, posts=1)
+    ctx["product_views"] = {"REEL": 120, "STORY": 30}
+    ctx["post_profile_activity"] = {
+        "visits": 5, "activity": 2, "breakdown": {"direction": 2},
+    }
+    ctx["best_weekdays"] = [0, 2]
+    ctx["audience"] = {
+        "audience_split": {"followers": 30, "non_followers": 70},
+        "follow_activity": {"follows": 10, "unfollows": 3},
+        "contact_actions": {"total": 4, "buttons": {"CALL": 4}},
+        "demographics": {"follower": {
+            "country": [("AZ", 40)],
+            "city": [("Baku, Baku", 20)],
+            "age_gender": [("25-34|F", 15)],
+        }},
+    }
+    text = format_context_for_ai(ctx)
+    assert "Просмотры по форматам: Reels 120, Сторис 30" in text
+    assert "Действия из публикаций: визиты в профиль 5" in text
+    assert "Лучшие дни для публикаций: Пн Ср" in text
+    assert "Демография подписчиков" in text
+    assert "25-34, жен" in text
+
+
 # ── message splitting (regression: «ком/ментариев» mid-word breaks) ──
 
 def test_split_message_text_keeps_words_intact():

@@ -91,6 +91,18 @@ class Settings:
     POSTS_WARM_INTERVAL_HOURS: int = int(os.getenv("POSTS_WARM_INTERVAL_HOURS", "24"))
     POSTS_COLD_INTERVAL_DAYS: int = int(os.getenv("POSTS_COLD_INTERVAL_DAYS", "7"))
 
+    # Google Sheets export (Apps Script Web App; no Google SDK required)
+    GOOGLE_SHEETS_ENABLED: bool = _get_bool("GOOGLE_SHEETS_ENABLED", False)
+    GOOGLE_SHEETS_WEBAPP_URL: str = os.getenv("GOOGLE_SHEETS_WEBAPP_URL", "")
+    GOOGLE_SHEETS_WEBAPP_TOKEN: str = os.getenv("GOOGLE_SHEETS_WEBAPP_TOKEN", "")
+    GOOGLE_SHEETS_TIMEOUT: int = int(os.getenv("GOOGLE_SHEETS_TIMEOUT", "60"))
+    # convert = import the xlsx (keeps Excel styling); values = basic values-only
+    GOOGLE_SHEETS_MODE: str = os.getenv("GOOGLE_SHEETS_MODE", "convert").strip().lower()
+    GOOGLE_SHEETS_FOLDER_URL: str = os.getenv(
+        "GOOGLE_SHEETS_FOLDER_URL",
+        "https://drive.google.com/drive/folders/1OMvTOOV8UfZHqBZx2rdH_dbwgJbCAq4H",
+    )
+
     # Chart settings
     CHART_STYLE: str = "seaborn-v0_8-whitegrid"
     CHART_COLORS: list[str] = ["#2196F3", "#4CAF50", "#FF9800", "#F44336"]
@@ -141,6 +153,19 @@ class Settings:
             errors.append(f"APP_TIMEZONE is invalid: {self.APP_TIMEZONE}")
         if self.SYNC_LEASE_TTL_SECONDS <= 0:
             errors.append("SYNC_LEASE_TTL_SECONDS must be greater than 0")
+        if self.GOOGLE_SHEETS_ENABLED:
+            if not self.GOOGLE_SHEETS_WEBAPP_URL:
+                warnings.append(
+                    "GOOGLE_SHEETS_WEBAPP_URL is not set — Google Sheets export disabled"
+                )
+            if not self.GOOGLE_SHEETS_WEBAPP_TOKEN:
+                warnings.append(
+                    "GOOGLE_SHEETS_WEBAPP_TOKEN is not set — Google Sheets export disabled"
+                )
+            if self.GOOGLE_SHEETS_TIMEOUT <= 0:
+                errors.append("GOOGLE_SHEETS_TIMEOUT must be greater than 0")
+            if self.GOOGLE_SHEETS_MODE not in {"convert", "values"}:
+                errors.append("GOOGLE_SHEETS_MODE must be 'convert' or 'values'")
         if self.BACKUP_INTERVAL_HOURS <= 0:
             errors.append("BACKUP_INTERVAL_HOURS must be greater than 0")
         if self.BACKUP_RETENTION_DAYS <= 0:

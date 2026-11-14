@@ -162,13 +162,27 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
             lock.release()
         self.assertEqual(overlapping["reason"], "already_running")
         self.assertEqual(set(overlapping), expected_keys)
+        # A historical window is final: a skipped refresh is not partial data.
+        self.assertFalse(overlapping["partial"])
 
         with patch.object(crud, "acquire_sync_lease", new=AsyncMock(return_value=False)):
             lease_held = await sync_account_data(account, since, until)
         self.assertEqual(lease_held["reason"], "lease_held")
         self.assertEqual(set(lease_held), expected_keys)
         self.assertEqual(lease_held["api_delay_dates"], [])
-        self.assertTrue(lease_held["partial"])
+        self.assertFalse(lease_held["partial"])
+
+        # A recent window can still be revised: the skip stays honest.
+        recent_until = datetime.now(timezone.utc).replace(tzinfo=None)
+        await lock.acquire()
+        try:
+            recent = await sync_account_data(
+                account, recent_until - timedelta(days=1), recent_until
+            )
+        finally:
+            lock.release()
+        self.assertTrue(recent["partial"])
+        self.assertEqual(recent["partial_reasons"], ["синхронизация уже выполняется"])
 
     async def test_old_post_insights_refresh_weekly_instead_of_freezing(self):
         now = datetime(2026, 9, 30, 12)
@@ -571,6 +585,160 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("shares", base_metrics)
         self.assertEqual(result["shares"], 7)
 
+    async def test_demographics_request_uses_singular_breakdown(self):
+        """Regression: the API takes `breakdown` (singular). Sending the plural
+        `breakdowns` returns no total_value, so every audience snapshot was
+        stored as an empty list and /audience showed no demographics."""
+        client = InstagramClient("user", "token")
+        captured = []
+
+        async def fake_request(url, params=None):
+            captured.append(dict(params or {}))
+            return {"data": [{
+                "name": "follower_demographics",
+                "total_value": {"breakdowns": [{
+                    "dimension_keys": ["age", "gender"],
+                    "results": [{"dimension_values": ["25-34", "F"], "value": 12}],
+                }]},
+            }]}
+
+        with patch.object(client, "_request", fake_request):
+            snapshots = await client.get_account_demographics("this_month")
+
+        self.assertTrue(captured)
+        for params in captured:
+            self.assertIn("breakdown", params)
+            self.assertNotIn("breakdowns", params)
+        self.assertEqual(len(snapshots), 9)
+        self.assertEqual(snapshots[0]["payload"], [{"key": "25-34|F", "value": 12}])
+
+    async def test_media_watch_time_is_mapped_to_stored_fields(self):
+        """Regression: the API returns ig_reels_* names, while the Post model
+        stores avg_watch_time/total_watch_time — the mapping was missing, so
+        every reel watch-time value was silently dropped."""
+        client = InstagramClient("user", "token")
+
+        async def fake_request(url, params=None):
+            metric = (params or {}).get("metric") or ""
+            if "ig_reels_avg_watch_time" in metric:
+                return {"data": [
+                    {"name": "ig_reels_avg_watch_time", "values": [{"value": 4889}]},
+                    {"name": "ig_reels_video_view_total_time", "values": [{"value": 6689000}]},
+                ]}
+            return {"data": [{"name": "reach", "values": [{"value": 100}]}]}
+
+        with patch.object(client, "_request", fake_request):
+            result = await client.get_media_insights("media-1", "REELS")
+
+        self.assertEqual(result["avg_watch_time"], 4889)
+        self.assertEqual(result["total_watch_time"], 6689000)
+        self.assertNotIn("ig_reels_avg_watch_time", result)
+
+    async def test_feed_views_are_requested_for_image_and_carousel(self):
+        """Feed posts expose views on API v25; they must be requested as a
+        separate family so an unsupported product type cannot break the base."""
+        client = InstagramClient("user", "token")
+        calls = []
+
+        async def fake_request(url, params=None):
+            calls.append(dict(params or {}))
+            if (params or {}).get("metric") == "views":
+                return {"data": [{"name": "views", "values": [{"value": 1871}]}]}
+            return {"data": [{"name": "reach", "values": [{"value": 988}]}]}
+
+        with patch.object(client, "_request", fake_request):
+            result = await client.get_media_insights("media-1", "IMAGE")
+
+        self.assertEqual(result["views"], 1871)
+        self.assertIn("views", [call.get("metric") for call in calls])
+
+    async def test_video_does_not_request_unupported_profile_family(self):
+        """The live API rejects follows/profile_visits/profile_activity for
+        true VIDEO media, so the client must not waste a request on it."""
+        client = InstagramClient("user", "token")
+        calls = []
+
+        async def fake_request(url, params=None):
+            calls.append(dict(params or {}))
+            metric = (params or {}).get("metric") or ""
+            if "ig_reels_avg_watch_time" in metric:
+                return {"data": [{"name": "ig_reels_avg_watch_time", "values": [{"value": 1}]}]}
+            return {"data": [{"name": "reach", "values": [{"value": 1}]}]}
+
+        with patch.object(client, "_request", fake_request):
+            await client.get_media_insights("media-1", "VIDEO")
+
+        requested = [call.get("metric") for call in calls]
+        self.assertFalse(any(metric and "profile_visits" in metric for metric in requested))
+
+    async def test_media_pagination_stops_before_the_window(self):
+        """The media edge is newest-first: pages older than date_from must not
+        be fetched (quota/performance), even when paging.next is present."""
+        client = InstagramClient("user", "token")
+        pages = [
+            {
+                "data": [{
+                    "id": "media-1", "media_type": "IMAGE",
+                    "timestamp": "2026-11-10T10:00:00+0000",
+                }],
+                "paging": {"next": "page-2"},
+            },
+            {
+                "data": [{
+                    "id": "media-2", "media_type": "IMAGE",
+                    "timestamp": "2026-10-01T10:00:00+0000",
+                }],
+                "paging": {"next": "page-3"},
+            },
+            {
+                "data": [{
+                    "id": "media-3", "media_type": "IMAGE",
+                    "timestamp": "2026-09-01T10:00:00+0000",
+                }],
+                "paging": {"next": "page-4"},
+            },
+        ]
+        urls = []
+
+        async def fake_request(url, params=None):
+            urls.append(url)
+            return pages[len(urls) - 1]
+
+        with patch.object(client, "_request", fake_request):
+            posts, _partial = await client.collect_posts_with_insights(
+                datetime(2026, 11, 1), datetime(2026, 11, 12),
+                insights_filter=lambda media_id, ts: False,
+            )
+
+        self.assertEqual(len(urls), 2)
+        self.assertEqual([post["instagram_media_id"] for post in posts], ["media-1"])
+
+    async def test_story_navigation_records_zero_actions(self):
+        """Instagram omits zero-valued navigation actions; once the block was
+        fetched, missing actions must be stored as known zeros."""
+        client = InstagramClient("user", "token")
+
+        async def fake_request(url, params=None):
+            metric = (params or {}).get("metric") or ""
+            if metric == "navigation":
+                return {"data": [{
+                    "name": "navigation",
+                    "total_value": {"breakdowns": [{"results": [
+                        {"dimension_values": ["tap_forward"], "value": 171},
+                        {"dimension_values": ["tap_exit"], "value": 190},
+                        {"dimension_values": ["swipe_forward"], "value": 50},
+                    ]}]},
+                }]}
+            return {"data": [{"name": "views", "total_value": {"value": 467}}]}
+
+        with patch.object(client, "_request", fake_request):
+            result = await client.get_story_insights("story-1")
+
+        self.assertEqual(result["tap_forward"], 171)
+        self.assertEqual(result["tap_back"], 0)
+        self.assertEqual(result["tap_exit"], 190)
+        self.assertEqual(result["swipe_forward"], 50)
+
     async def test_daily_stats_extended_metrics_and_breakdowns(self):
         """Extended day metrics (probe 2026-10): scalars, breakdown JSON and
         cumulative provenance must all survive a save."""
@@ -765,16 +933,38 @@ class ReliabilityTests(unittest.IsolatedAsyncioTestCase):
         await engine.dispose()
 
     def test_expected_metrics_cover_image_shares(self):
-        """If shares are requested for IMAGE, completeness tracking must expect
-        them too — otherwise every photo is flagged as having missing metrics."""
+        """If shares/views are requested for IMAGE, completeness tracking must
+        expect them too — otherwise every photo is flagged as having missing
+        metrics. API v25 reports views for feed posts as well."""
         from analytics.calculations import calculate_content_summary
 
         post = SimpleNamespace(
             media_type="IMAGE", likes=10, comments=2, saved=3, shares=5,
             reach=100, total_interactions=20,
-            insights_present='["reach", "saved", "shares", "total_interactions"]',
+            insights_present='["reach", "views", "saved", "shares", "total_interactions"]',
         )
         summary = calculate_content_summary([post])
         self.assertEqual(summary["partial_insights_posts"], 0)
         self.assertNotIn("shares", summary["missing_insight_metrics"])
+        self.assertNotIn("views", summary["missing_insight_metrics"])
+
+    async def test_period_snapshot_stores_replies_and_website_clicks(self):
+        """New period columns must be persisted and read back, so reports can
+        show API totals instead of silently dropping them."""
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        with patch.object(crud, "async_session_factory", factory):
+            await crud.upsert_period_snapshot(
+                1, date(2026, 11, 7), date(2026, 11, 13),
+                {"reach": 100, "replies": 3, "website_clicks": 7},
+            )
+            snapshot = await crud.get_period_snapshot(1, date(2026, 11, 7), date(2026, 11, 13))
+
+        self.assertEqual(snapshot.replies, 3)
+        self.assertEqual(snapshot.website_clicks, 7)
+        self.assertEqual(snapshot.reach, 100)
+        await engine.dispose()
 

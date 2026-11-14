@@ -56,6 +56,7 @@ async def cmd_audience(message: Message):
         aggregate_breakdowns, audience_split, contact_actions, follow_activity,
         online_followers_peak, summarize_audience_snapshots,
     )
+    from reports.naming import demographic_label
 
     accounts = await crud.get_all_accounts()
     if not accounts:
@@ -114,7 +115,7 @@ async def cmd_audience(message: Message):
                     continue
                 rendered = []
                 for key, value in items[:4]:
-                    label = str(key).replace("|M", ", муж").replace("|F", ", жен")
+                    label = demographic_label(key)
                     rendered.append(f"{label} — {format_number(value)}")
                 lines.append(f"  {dimension_names.get(dimension, dimension)}: " + ", ".join(rendered))
         if peak:

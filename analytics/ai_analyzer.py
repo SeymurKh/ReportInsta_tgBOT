@@ -5,8 +5,11 @@ import logging
 from openai import AsyncOpenAI
 
 from config import settings
+from reports.naming import PRODUCT_TYPE_NAMES, demographic_label
 
 logger = logging.getLogger(__name__)
+
+WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 REPORT_SYSTEM_PROMPT = (
     "Ты senior SMM-аналитик. Отвечай на русском языке, опирайся только на переданные данные. "
@@ -181,6 +184,43 @@ class AIAnalyzer:
                     f"больше всего подписчиков принёс пост «{best_follows['caption']}» "
                     f"(+{best_follows['follows']})"
                 )
+            product_views = extended.get("product_views")
+            if product_views:
+                parts.append(
+                    "просмотры по форматам: " + ", ".join(
+                        f"{PRODUCT_TYPE_NAMES.get(key, key)} {value}"
+                        for key, value in product_views.items()
+                    )
+                )
+            profile_activity = extended.get("post_profile_activity")
+            if profile_activity:
+                detail = f"визиты в профиль {profile_activity['visits']}"
+                directions = (profile_activity.get("breakdown") or {}).get("direction")
+                if directions:
+                    detail += f", маршруты {directions}"
+                parts.append("из публикаций: " + detail)
+            best_weekdays = extended.get("best_weekdays")
+            if best_weekdays:
+                parts.append(
+                    "лучшие дни по активности подписчиков: "
+                    + " ".join(WEEKDAYS_RU[day] for day in best_weekdays)
+                )
+            demographics = extended.get("demographics") or {}
+            follower_demo = demographics.get("follower") or {}
+            if follower_demo:
+                demo_parts = []
+                for dimension, label in (
+                    ("country", "страны"), ("city", "города"), ("age_gender", "возраст/пол"),
+                ):
+                    items = follower_demo.get(dimension) or []
+                    if items:
+                        demo_parts.append(
+                            label + " " + ", ".join(
+                                f"{demographic_label(key)} {value}" for key, value in items[:5]
+                            )
+                        )
+                if demo_parts:
+                    parts.append("демография подписчиков: " + "; ".join(demo_parts))
             if parts:
                 extended_line = "\n- Расширенные метрики: " + "; ".join(parts) + "."
         current_followers = stats_summary.get("followers_current")
@@ -190,7 +230,7 @@ class AIAnalyzer:
 
 ДАННЫЕ:
 - Подписчики сейчас: {current_followers if current_followers is not None else 'н/д'}; прирост за период: {follower_growth if follower_growth is not None else 'н/д'} ({follower_growth_pct if follower_growth_pct is not None else 'н/д'}%)
-- Охват (уникальные): {stats_summary.get('reach_total', 0)}; Просмотры (с повторами): {stats_summary.get('views_total', 'н/д')}; Вовлечённые (уникальные): {stats_summary.get('accounts_engaged_total', 'н/д')}; Взаимодействия (все): {stats_summary.get('total_interactions_total', 'н/д')}; Просмотры профиля: {stats_summary.get('profile_views_total', 'н/д')}
+- Охват (уникальные): {stats_summary.get('reach_total', 0)}; Просмотры (с повторами): {stats_summary.get('views_total', 'н/д')}; Вовлечённые (уникальные): {stats_summary.get('accounts_engaged_total', 'н/д')}; Взаимодействия (все): {stats_summary.get('total_interactions_total', 'н/д')}; Просмотры профиля: {stats_summary.get('profile_views_total', 'н/д')}; Переходы по ссылке: {stats_summary.get('website_clicks_total', 'н/д')}; Ответы (аккаунт): {stats_summary.get('replies_total', 'н/д')}
 - Контент: {content_summary.get('total_posts', 0)} публикаций; Reels {content_summary.get('total_reels', 0)}; видео {content_summary.get('total_videos', 0)}; фото {content_summary.get('total_images', 0)}; карусели {content_summary.get('total_carousels', 0)}
 - Средние значения на публикацию: лайки {content_summary.get('avg_likes', 0)}; комментарии {content_summary.get('avg_comments', 0)}; сохранения {content_summary.get('avg_saves', 0)}; репосты {content_summary.get('avg_shares', 0)}; охват {content_summary.get('avg_reach', 0)}; ER публикаций {content_summary.get('engagement_rate', 0)}% (total_interactions Insights {content_summary.get('total_interactions', 'н/д')} / суммарный охват публикаций {content_summary.get('total_reach', 'н/д')})
 - Сверка взаимодействий: сумма ❤/💬/💾/📤 {content_summary.get('component_interactions', 'н/д')} + другие действия Instagram = total_interactions {content_summary.get('total_interactions', 'н/д')}. Это норма расширенного счётчика Instagram: не считай расхождение проблемой и не предлагай его исправлять.

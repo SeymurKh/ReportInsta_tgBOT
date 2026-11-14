@@ -6,6 +6,7 @@ from datetime import date
 from aiogram.types import Message, BufferedInputFile, InputMediaPhoto
 
 from bot.keyboards import question_after_report_kb
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,46 @@ async def send_excel(message: Message, context: dict, dialogue_history: list | N
     except Exception as e:
         logger.error(f"Excel error: {e}", exc_info=True)
         await message.answer(f"❌ Ошибка: {e}", parse_mode=None)
+    finally:
+        try:
+            await loading_msg.delete()
+        except Exception:
+            pass
+
+
+async def send_google_sheet(
+    message: Message, context: dict, dialogue_history: list | None = None
+) -> None:
+    """Export the report to Google Sheets and reply with the link."""
+    from reports.google_sheets import (
+        GoogleSheetsError, GoogleSheetsNotConfigured, export_report,
+    )
+
+    loading_msg = await message.answer("⏳ Выгружаю в Google Sheets...")
+    try:
+        url = await export_report(context, dialogue_history)
+        await message.answer(
+            f"📊 Готово: {url}\n\nПапка: {settings.GOOGLE_SHEETS_FOLDER_URL}",
+            parse_mode=None,
+        )
+    except GoogleSheetsNotConfigured:
+        await message.answer(
+            "☁️ Выгрузка в Google Sheets не настроена: "
+            "добавьте GOOGLE_SHEETS_WEBAPP_URL и GOOGLE_SHEETS_WEBAPP_TOKEN в .env.",
+            parse_mode=None,
+        )
+    except GoogleSheetsError as error:
+        logger.error("Google Sheets export failed: %s", error, exc_info=True)
+        await message.answer(
+            f"❌ Не удалось выгрузить в Google Sheets: {error}",
+            parse_mode=None,
+        )
+    except Exception as error:
+        logger.error("Google Sheets export crashed: %s", error, exc_info=True)
+        await message.answer(
+            "❌ Не удалось выгрузить в Google Sheets. Попробуйте позже.",
+            parse_mode=None,
+        )
     finally:
         try:
             await loading_msg.delete()

@@ -12,7 +12,8 @@ from analytics.calculations import (
     compare_content_formats, daily_peaks, data_quality_summary, metric_is_present,
     aggregate_breakdowns, audience_split, contact_actions, contact_facts,
     follow_activity, reposts_total, best_post_by_followers, reels_watch_summary,
-    summarize_audience_snapshots,
+    summarize_audience_snapshots, product_type_split, profile_activity_summary,
+    online_followers_peak, breakdown_coverage,
 )
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from reports.naming import (
@@ -27,6 +28,9 @@ from reports.naming import (
     L_TREND, L_VIEWS, L_VIEWS_DAILY, PLAIN_WORDS,
     L_FOLLOWS, L_FOLLOWS_ONLY, L_UNFOLLOWS_ONLY,
     L_AUDIENCE_SPLIT, L_CONTACT_ACTIONS, L_REPOSTS,
+    L_REPLIES_ACCOUNT, L_WEBSITE_CLICKS,
+    L_VIEWS_BY_FORMAT, L_REACH_BY_FORMAT, L_PROFILE_ACTIVITY,
+    PRODUCT_TYPE_NAMES, SEC_AUDIENCE, demographic_label,
     L_REELS_WATCH, L_BEST_BY_FOLLOWS, CONTACT_BUTTON_NAMES,
     SEC_ACTIVITY, SEC_CONTENT, SEC_FOLLOWERS, SEC_STORIES, TREND_ADVERB,
     DIVIDER_WIDTH, cmp_row, mono_block, table_section,
@@ -86,6 +90,7 @@ def _merge_period_totals(stats_summary: dict, totals: dict) -> dict:
     for api_key in (
         "likes", "comments", "saves", "shares", "total_interactions", "profile_views",
         "profile_links_taps", "reposts", "follows", "unfollows",
+        "replies", "website_clicks",
     ):
         if totals.get(api_key) is not None:
             stats_summary[f"{api_key}_total"] = totals[api_key]
@@ -152,12 +157,21 @@ async def _refresh_stories_if_recent(account, until_dt: datetime) -> None:
         logger.warning(f"Stories refresh failed for @{account.username}: {e}")
 
 
-def _warnings_block(api_delay_dates: list[str], partial: bool) -> str:
+def _partial_warning(*fetch_infos: dict) -> str:
+    """One honest line about partial data: API failure vs a skipped sync."""
+    if any(info.get("partial") and not info.get("skipped") for info in fetch_infos):
+        return "⚠️ Часть данных не удалось получить из Instagram API — отчёт может быть неполным"
+    if any(info.get("skipped") and info.get("partial") for info in fetch_infos):
+        return "⏳ Синхронизация уже выполняется — отчёт может содержать предыдущие значения"
+    return ""
+
+
+def _warnings_block(api_delay_dates: list[str], partial_text: str) -> str:
     parts = []
     if api_delay_dates:
         parts.append(f"⚠️ Данные за {', '.join(api_delay_dates)} могут быть неполными (задержка Instagram API ~24-48ч)")
-    if partial:
-        parts.append("⚠️ Часть данных не удалось получить из Instagram API — отчёт может быть неполным")
+    if partial_text:
+        parts.append(partial_text)
     return ("\n\n" + "\n".join(parts)) if parts else ""
 
 
@@ -304,7 +318,8 @@ async def generate_report(
     best_follows_post = best_post_by_followers(posts_list)
     try:
         demographics = summarize_audience_snapshots(
-            await crud.get_audience_snapshots(account.id, as_of=date_to)
+            await crud.get_audience_snapshots(account.id, as_of=date_to),
+            limit=10,
         )
     except Exception as error:  # table may be missing on legacy DBs — never crash a report
         logger.warning("Audience snapshots unavailable for @%s: %s", account.username, error)
@@ -331,6 +346,18 @@ async def generate_report(
         contacts = contact_facts(stats_summary.get("profile_links_taps_total"), buttons)
     if stats_summary.get("reposts_total") is not None:
         reposts = stats_summary["reposts_total"]
+    product_views = product_type_split(stats_summary.get("breakdowns_total") or {}, "views")
+    product_reach = product_type_split(stats_summary.get("breakdowns_total") or {}, "reach")
+    post_profile = profile_activity_summary(posts_list)
+    best_days = online_followers_peak(stats_list)
+    if product_views:
+        stats_summary["product_views_total"] = product_views
+    if product_reach:
+        stats_summary["product_reach_total"] = product_reach
+    if post_profile:
+        stats_summary["post_profile_activity"] = post_profile
+    if best_days:
+        stats_summary["best_weekdays"] = best_days["best_weekdays"]
     data_quality = data_quality_summary(
         stats_list, expected_days=(date_to - date_from).days + 1
     )
@@ -384,6 +411,10 @@ async def generate_report(
                 "follow_activity": follows_activity,
                 "reposts": reposts,
                 "reels_watch": watch,
+                "product_views": product_views,
+                "post_profile_activity": post_profile,
+                "best_weekdays": best_days["best_weekdays"] if best_days else None,
+                "demographics": demographics or None,
                 "best_follows_post": (
                     {
                         "caption": best_follows_post.caption[:80].replace("\n", " ").strip(),
@@ -460,9 +491,27 @@ async def generate_report(
         (L_ENGAGED, accounts_engaged_str),
         (L_INTERACTIONS, interactions_str),
         (L_PROFILE_VIEWS, profile_views_str),
+        (L_WEBSITE_CLICKS, metric_str(stats_summary, "website_clicks_total")),
+        (L_REPLIES_ACCOUNT, metric_str(stats_summary, "replies_total")),
         (L_ACCOUNT_ER, account_er_str),
         (L_REACH_DAILY, metric_str(stats_summary, "reach_avg_daily")),
     ]
+    if product_views:
+        activity_rows.append((
+            L_VIEWS_BY_FORMAT,
+            " · ".join(
+                f"{PRODUCT_TYPE_NAMES.get(key, key)} {format_number(value)}"
+                for key, value in sorted(product_views.items(), key=lambda kv: -kv[1])
+            ),
+        ))
+    if product_reach:
+        activity_rows.append((
+            L_REACH_BY_FORMAT,
+            " · ".join(
+                f"{PRODUCT_TYPE_NAMES.get(key, key)} {format_number(value)}"
+                for key, value in sorted(product_reach.items(), key=lambda kv: -kv[1])
+            ),
+        ))
     if audience and (audience["followers"] + audience["non_followers"]) > 0:
         split_total = audience["followers"] + audience["non_followers"]
         activity_rows.append((
@@ -519,6 +568,23 @@ async def generate_report(
             ],
         ))
 
+    audience_rows = []
+    follower_demo = (demographics or {}).get("follower") or {}
+    for dimension, label in (
+        ("country", "Страны"), ("city", "Города"), ("age_gender", "Возраст и пол"),
+    ):
+        items = follower_demo.get(dimension) or []
+        if items:
+            audience_rows.append((
+                label,
+                " · ".join(
+                    f"{demographic_label(key)} {format_number(value)}"
+                    for key, value in items[:3]
+                ),
+            ))
+    if audience_rows:
+        tables.append(table_section(SEC_AUDIENCE, audience_rows))
+
     formats_line = (
         f"🎬 Reels {content_summary['total_reels']} · "
         f"📷 Фото {content_summary['total_images']} · "
@@ -539,9 +605,26 @@ async def generate_report(
             f"💾 {saves_str} · 📤 {shares_str}{other_actions}"
         )
 
+    profile_activity_line = ""
+    if post_profile:
+        parts = [f"визиты в профиль {format_number(post_profile['visits'])}"]
+        directions = (post_profile.get("breakdown") or {}).get("direction")
+        if directions:
+            parts.append(f"маршруты {format_number(directions)}")
+        if post_profile.get("activity"):
+            parts.append(f"всего действий {format_number(post_profile['activity'])}")
+        profile_activity_line = f"{L_PROFILE_ACTIVITY}: " + " · ".join(parts)
+    best_days_line = ""
+    if best_days:
+        best_days_line = (
+            "Лучшие дни для публикаций (по активности подписчиков): "
+            + " ".join(WEEKDAYS_RU[d] for d in best_days["best_weekdays"])
+        )
     notes = [
         interaction_line,
         f"Форматы публикаций: {formats_line}",
+        profile_activity_line,
+        best_days_line,
         stories_footer,
         PLAIN_WORDS,
     ]
@@ -552,8 +635,9 @@ async def generate_report(
         warning_parts.append(
             f"⚠️ Данные за {', '.join(api_delay_dates)} могут быть неполными (задержка Instagram API ~24-48ч)"
         )
-    if fetch_info.get("partial"):
-        warning_parts.append("⚠️ Часть данных не удалось получить из Instagram API — отчёт может быть неполным")
+    partial_text = _partial_warning(fetch_info)
+    if partial_text:
+        warning_parts.append(partial_text)
     if not stats_summary.get("totals_from_api"):
         warning_parts.append("⚠️ Итоги API недоступны — охват и вовлечённые показаны суммой по дням")
     young_days = _young_days(date_from, date_to)
@@ -564,6 +648,17 @@ async def generate_report(
     warning_parts.extend(
         _data_quality_warnings(data_quality, content_summary, stories_summary, young_days)
     )
+    for metric, breakdown, label in (
+        ("views", "follow_type", "сплит подписчики/неподписчики"),
+        ("profile_links_taps", "contact_button_type", "кнопки связи"),
+    ):
+        if (stats_summary.get("breakdowns_total") or {}).get(metric, {}).get(breakdown):
+            continue
+        coverage = breakdown_coverage(stats_list, metric, breakdown)
+        if coverage and coverage[0] < coverage[1]:
+            warning_parts.append(
+                f"⚠️ {label}: данные за {coverage[0]} из {coverage[1]} дней"
+            )
     warnings_text = "\n\n".join(warning_parts)
 
     report_text = "\n\n".join(part for part in [
@@ -653,6 +748,10 @@ async def generate_report(
         "daily_peaks": daily_peaks(stats_list),
         "data_quality": data_quality,
         "ai_analysis": ai_analysis,
+        "product_views": product_views,
+        "product_reach": product_reach,
+        "post_profile_activity": post_profile,
+        "best_weekdays": best_days["best_weekdays"] if best_days else None,
         "audience": audience_context or None,
     }
 
@@ -684,7 +783,7 @@ async def generate_comparison_periods_report(
     api_delay_dates = sorted(set(
         f1.get("api_delay_dates", []) + f2.get("api_delay_dates", [])
     ))
-    partial = bool(f1.get("partial")) or bool(f2.get("partial"))
+    partial_text = _partial_warning(f1, f2)
     await _refresh_stories_if_recent(account, max(p1_until_dt, p2_until_dt))
 
     p1_stats = await crud.get_daily_stats(account.id, period1_from, period1_to)
@@ -823,6 +922,8 @@ async def generate_comparison_periods_report(
         cmp_line(L_REACH, s1["reach_total"], s2["reach_total"]),
         cmp_line(L_VIEWS, s1["views_total"], s2["views_total"]),
         cmp_line(L_ENGAGED, s1["accounts_engaged_total"], s2["accounts_engaged_total"]),
+        cmp_line(L_WEBSITE_CLICKS, s1.get("website_clicks_total"), s2.get("website_clicks_total")),
+        cmp_line(L_REPLIES_ACCOUNT, s1.get("replies_total"), s2.get("replies_total")),
         cmp_rate_row(L_AUDIENCE_SPLIT, split_share(split1), split_share(split2)),
         cmp_line(L_CONTACT_ACTIONS, ext1_contacts and ext1_contacts["total"], ext2_contacts and ext2_contacts["total"]),
         cmp_line(L_REPOSTS, ext1_reposts, ext2_reposts),
@@ -942,7 +1043,7 @@ async def generate_comparison_periods_report(
             "⚠️ Итоги API недоступны для одного из периодов — его показатели "
             "показаны суммой по дням"
         )
-    warnings_text = _warnings_block(api_delay_dates, partial).strip("\n")
+    warnings_text = _warnings_block(api_delay_dates, partial_text).strip("\n")
     if warnings_text:
         lines.append(warnings_text)
     lines.append(f"\n🤖 AI-сравнение\n{ai_analysis}")

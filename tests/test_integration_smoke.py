@@ -83,6 +83,9 @@ def test_excel_comparison_contains_daily_and_format_sections():
     assert "Средние значения за день" in values
     assert "Форматы контента" in values
     assert "Лучшие публикации" in values
+    assert "Аудитория и расширенное" in values
+    assert "Переходы по ссылке" in values
+    assert "Подписчики / неподписчики (просмотры)" in values
 
 
 def test_excel_percent_cells_use_native_percent_format():
@@ -276,7 +279,8 @@ def test_report_survives_skipped_sync_result_shape():
 
     result = asyncio.run(run())
     assert result["text"]
-    assert "⚠️ Часть данных не удалось получить" in result["text"]
+    assert "⏳ Синхронизация уже выполняется" in result["text"]
+    assert "Часть данных не удалось получить" not in result["text"]
 
 
 def test_comparison_survives_skipped_sync_result_shape():
@@ -301,7 +305,18 @@ def test_comparison_survives_skipped_sync_result_shape():
 
     result = asyncio.run(run())
     assert result["text"]
-    assert "⚠️ Часть данных не удалось получить" in result["text"]
+    assert "⏳ Синхронизация уже выполняется" in result["text"]
+    assert "Часть данных не удалось получить" not in result["text"]
+
+
+def test_partial_warning_distinguishes_skipped_sync():
+    from reports.generator import _partial_warning
+
+    assert "не удалось получить" in _partial_warning({"partial": True})
+    assert "Синхронизация уже выполняется" in _partial_warning(
+        {"skipped": True, "partial": True}
+    )
+    assert _partial_warning({"skipped": True, "partial": False}) == ""
 
 
 def test_merge_period_totals_prefers_api_unique_metrics():

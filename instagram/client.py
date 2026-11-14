@@ -24,8 +24,14 @@ MEDIA_METRICS_MAP: dict[str, list[str]] = {
 # family is requested separately and skipped silently when unsupported.
 MEDIA_PROFILE_METRICS = ["follows", "profile_visits", "profile_activity"]
 MEDIA_WATCHTIME_METRICS = ["ig_reels_avg_watch_time", "ig_reels_video_view_total_time"]
-MEDIA_PROFILE_METRIC_TYPES = {"IMAGE", "CAROUSEL_ALBUM", "VIDEO"}
+# Live API rejects the profile family for VIDEO (only IMAGE/CAROUSEL_ALBUM
+# accept it), so requesting it there only wastes a call.
+MEDIA_PROFILE_METRIC_TYPES = {"IMAGE", "CAROUSEL_ALBUM"}
 MEDIA_WATCHTIME_METRIC_TYPES = {"REELS", "VIDEO"}
+
+# Feed posts report views too (IMAGE/CAROUSEL_ALBUM) on API v25. Requested as a
+# separate family so an unsupported product type cannot break the base metrics.
+MEDIA_OPTIONAL_VIEW_TYPES = {"IMAGE", "CAROUSEL_ALBUM"}
 
 # Extended account metrics (live-API probe 2026-10), collected as a separate
 # request so an unsupported metric cannot take down the core day totals.
@@ -75,7 +81,7 @@ ACCOUNT_DAY_TOTAL_METRICS_CORE = [
 # never be computed by summing days.
 ACCOUNT_PERIOD_TOTAL_METRICS = [
     "reach", "accounts_engaged", "views", "likes", "comments", "saves",
-    "shares", "total_interactions", "profile_views",
+    "shares", "replies", "total_interactions", "profile_views", "website_clicks",
 ]
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=60)
@@ -467,7 +473,10 @@ class InstagramClient:
                         "period": "lifetime",
                         "timeframe": timeframe,
                         "metric_type": "total_value",
-                        "breakdowns": dimension,
+                        # Live API: the singular `breakdown` returns
+                        # total_value.breakdowns; the plural `breakdowns` is
+                        # accepted but yields no values at all.
+                        "breakdown": dimension,
                     })
                 except InstagramAPIError as error:
                     logger.info(
@@ -547,10 +556,21 @@ class InstagramClient:
                         result["profile_activity_breakdown"] = breakdown
                 except (NotEnoughViewersError, InstagramAPIError) as e:
                     logger.info(f"Media {media_id} activity breakdown unavailable: {e}")
-        if media_type in MEDIA_WATCHTIME_METRIC_TYPES:
+        if media_type in MEDIA_OPTIONAL_VIEW_TYPES:
             result.update(await self._get_media_metric_family(
-                url, MEDIA_WATCHTIME_METRICS, media_id, "watch-time"
+                url, ["views"], media_id, "views"
             ))
+        if media_type in MEDIA_WATCHTIME_METRIC_TYPES:
+            watch = await self._get_media_metric_family(
+                url, MEDIA_WATCHTIME_METRICS, media_id, "watch-time"
+            )
+            # The API names differ from the stored post columns; map them so
+            # CRUD can persist avg_watch_time/total_watch_time.
+            if "ig_reels_avg_watch_time" in watch:
+                watch["avg_watch_time"] = watch.pop("ig_reels_avg_watch_time")
+            if "ig_reels_video_view_total_time" in watch:
+                watch["total_watch_time"] = watch.pop("ig_reels_video_view_total_time")
+            result.update(watch)
         return result
 
     async def _get_media_metric_family(
@@ -620,6 +640,14 @@ class InstagramClient:
                         dim = res.get("dimension_values", [""])[0]
                         if dim in ("tap_forward", "tap_back", "tap_exit", "swipe_forward"):
                             result[dim] = res.get("value", 0)
+                # Instagram omits zero-valued navigation actions from the
+                # breakdown. Once the block was fetched, missing actions are
+                # real zeros — record them so provenance is complete.
+                if any(key in result for key in (
+                    "tap_forward", "tap_back", "tap_exit", "swipe_forward",
+                )):
+                    for key in ("tap_forward", "tap_back", "tap_exit", "swipe_forward"):
+                        result.setdefault(key, 0)
         except (NotEnoughViewersError, InstagramAPIError) as e:
             logger.info(f"Story {media_id} navigation unavailable: {e}")
 
@@ -659,9 +687,21 @@ class InstagramClient:
                 logger.error(f"Media pagination failed, using partial data: {e}")
                 partial = True
                 break
-            all_media.extend(data.get("data", []))
+            page = data.get("data", [])
+            all_media.extend(page)
+            if not page:
+                break
+            # The media edge is newest-first: once the oldest item of a page is
+            # before the window, further pages cannot contain posts we need.
+            oldest = page[-1].get("timestamp")
+            if oldest:
+                try:
+                    if parse_ig_timestamp(oldest) < date_from:
+                        break
+                except (TypeError, ValueError):
+                    pass
             url = data.get("paging", {}).get("next")
-            params = None  # next URL already contains params
+            params = None  # next URL already contains all params
 
         posts = []
         for media in all_media:
@@ -721,6 +761,15 @@ class InstagramClient:
                 ),
             })
         return posts, partial
+
+    async def get_media_metric_family(self, media_id: str, metrics: list[str]) -> dict:
+        """Targeted refresh of selected metrics (used by backfill tools).
+
+        Unlike get_media_insights this does not re-fetch the base metric set,
+        so a historical backfill stays inside the per-account API quota.
+        """
+        url = f"{self.base_url}/{media_id}/insights"
+        return await self._get_media_metric_family(url, metrics, media_id, "targeted")
 
     async def close(self):
         """Deprecated: use close_shared_session() instead."""

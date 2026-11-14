@@ -410,3 +410,119 @@ def test_extended_metric_aggregates_respect_presence_and_labels():
     )
     summary = summarize_audience_snapshots([snap])
     assert summary["follower"]["country"] == [("AZ", 40), ("RU", 10)]
+
+
+def test_summarize_audience_snapshots_supports_a_limit():
+    import json as _json
+    from types import SimpleNamespace
+    from analytics.calculations import summarize_audience_snapshots
+
+    snap = SimpleNamespace(
+        scope="follower", dimension="country",
+        payload=_json.dumps([{"key": str(i), "value": i} for i in range(1, 15)]),
+    )
+    assert len(summarize_audience_snapshots([snap], limit=10)["follower"]["country"]) == 10
+    assert len(summarize_audience_snapshots([snap])["follower"]["country"]) == 5
+
+
+def test_product_type_split_keeps_only_measured_buckets():
+    from analytics.calculations import product_type_split
+
+    breakdowns = {"views": {"media_product_type": {"POST": 10, "REEL": 50, "STORY": 0}}}
+    assert product_type_split(breakdowns) == {"POST": 10, "REEL": 50}
+    assert product_type_split({"views": {"follow_type": {"FOLLOWER": 1}}}) is None
+    assert product_type_split({}, "reach") is None
+
+
+def test_profile_activity_summary_aggregates_visits_and_breakdown():
+    import json as _json
+    from types import SimpleNamespace
+    from analytics.calculations import profile_activity_summary
+
+    posts = [
+        SimpleNamespace(profile_visits=4, profile_activity=2,
+                        profile_activity_breakdown=_json.dumps({"direction": 2})),
+        SimpleNamespace(profile_visits=6, profile_activity=0,
+                        profile_activity_breakdown=None),
+    ]
+    assert profile_activity_summary(posts) == {
+        "visits": 10, "activity": 2, "breakdown": {"direction": 2},
+    }
+    assert profile_activity_summary([]) is None
+
+
+def test_breakdown_coverage_counts_only_days_with_metadata():
+    import json as _json
+    from types import SimpleNamespace
+    from analytics.calculations import breakdown_coverage
+
+    def row(breakdowns, present='["views"]'):
+        return SimpleNamespace(
+            metrics_present=present,
+            breakdowns=_json.dumps(breakdowns) if breakdowns is not None else None,
+        )
+
+    stats = [
+        row({"views": {"follow_type": {"FOLLOWER": 1}}}),
+        row({}),
+        row(None, present=None),
+    ]
+    assert breakdown_coverage(stats, "views", "follow_type") == (1, 2)
+    assert breakdown_coverage([], "views", "follow_type") is None
+
+
+def test_trend_points_keep_the_real_time_axis():
+    from analytics.calculations import detect_trend
+
+    # Four days with a one-day gap: a compressed series would report 1.0/day.
+    points = [(0, 10.0), (1, 10.5), (3, 11.5), (4, 12.0)]
+    assert round(detect_trend(points)["slope"], 3) == 0.5
+
+
+def test_quality_checks_extended_metrics_only_when_measured():
+    import json as _json
+    from datetime import date
+    from types import SimpleNamespace
+    from analytics.calculations import data_quality_summary
+
+    def row(present, partial=False):
+        return SimpleNamespace(
+            date=date(2026, 9, 1), is_partial=partial,
+            metrics_present=_json.dumps(present),
+        )
+
+    stats = [
+        row(["reach", "likes", "follows"]),
+        row(["reach"]),
+        row(["reach", "follows"], partial=True),
+    ]
+    missing = data_quality_summary(stats, expected_days=3)["metric_missing_days"]
+    assert missing["reach"] == 0
+    assert missing["likes"] == 1
+    assert missing["follows"] == 1
+    assert "website_clicks" not in missing
+
+
+def test_story_navigation_block_is_complete_when_zero_action_is_omitted():
+    import json as _json
+    from types import SimpleNamespace
+
+    from analytics.calculations import calculate_stories_summary
+
+    story = SimpleNamespace(
+        views=467, reach=419, replies=0, shares=0, total_interactions=5,
+        profile_activity=0, follows=0, tap_forward=171, tap_back=0,
+        tap_exit=190, swipe_forward=50, is_active=False,
+        metrics_present=_json.dumps([
+            "views", "reach", "replies", "shares", "total_interactions",
+            "profile_activity", "follows", "tap_forward", "tap_exit", "swipe_forward",
+        ]),
+    )
+    summary = calculate_stories_summary([story])
+    assert summary["partial_insights_stories"] == 0
+    assert "tap_back" not in summary["missing_insight_metrics"]
+
+    # If the navigation block was not fetched at all, the story stays partial.
+    story.metrics_present = _json.dumps(["views", "reach"])
+    summary = calculate_stories_summary([story])
+    assert summary["partial_insights_stories"] == 1

@@ -44,6 +44,8 @@ L_VIEWS = "Просмотры (с повторами)"
 L_ENGAGED = "Вовлечённые (уникальные)"
 L_INTERACTIONS = "Взаимодействия (все)"
 L_PROFILE_VIEWS = "Просмотры профиля"
+L_REPLIES_ACCOUNT = "Ответы (аккаунт)"
+L_WEBSITE_CLICKS = "Переходы по ссылке"
 L_ACCOUNT_ER = "ER аккаунта"
 L_REACH_DAILY = "Средний дневной охват"
 
@@ -65,6 +67,27 @@ L_CONTACT_ACTIONS = "Кнопки связи"
 L_REPOSTS = "Репосты контента"
 L_REELS_WATCH = "Ср. время просмотра рилса"
 L_BEST_BY_FOLLOWS = "Больше всего подписчиков принёс"
+L_VIEWS_BY_FORMAT = "Просмотры по форматам"
+L_REACH_BY_FORMAT = "Охват по форматам"
+L_PROFILE_ACTIVITY = "Из публикаций"
+SEC_AUDIENCE = "👥 АУДИТОРИЯ"
+
+# media_product_type labels — matched case-insensitively
+PRODUCT_TYPE_NAMES = {
+    "POST": "Посты", "REEL": "Reels", "STORY": "Сторис",
+    "CAROUSEL_CONTAINER": "Карусели", "IGTV": "IGTV", "AD": "Реклама",
+}
+
+GENDER_LABELS = {"M": "муж", "F": "жен", "U": "не указан"}
+
+
+def demographic_label(key) -> str:
+    """«25-34|F» → «25-34, жен»; country/city keys stay untouched."""
+    text = str(key)
+    if "|" in text:
+        base, gender = text.rsplit("|", 1)
+        return f"{base}, {GENDER_LABELS.get(gender.upper(), gender)}"
+    return text
 
 # contact_button_type labels — matched case-insensitively
 CONTACT_BUTTON_NAMES = {

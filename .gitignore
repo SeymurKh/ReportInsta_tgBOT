@@ -15,6 +15,9 @@ env/
 
 # Environment variables
 .env
+# Local .env backups contain tokens — never commit them
+.env.bak-*
+.env.local
 
 # IDE
 .vscode/

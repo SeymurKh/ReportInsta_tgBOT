@@ -88,6 +88,7 @@ def question_after_report_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📄 Скачать Excel", callback_data="download_excel", style="success")],
+            [InlineKeyboardButton(text="☁️ В Google Sheets", callback_data="export_google_sheets", style="primary")],
             [InlineKeyboardButton(text="💬 Вопрос по отчёту", callback_data="question_about_report", style="primary")],
         ]
     )

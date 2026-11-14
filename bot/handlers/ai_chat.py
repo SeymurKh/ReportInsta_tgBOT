@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from analytics.ai_analyzer import get_analyzer, AI_UNAVAILABLE_TEXT
 from bot.states import AIForm
 from bot.keyboards import dialogue_kb, main_menu_kb
-from bot.helpers import send_excel
+from bot.helpers import send_excel, send_google_sheet
 from utils.formatters import format_context_for_ai
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,17 @@ async def download_excel_callback(callback: CallbackQuery, state: FSMContext):
         return
     await callback.answer()
     await send_excel(callback.message, context, data.get("dialogue_history"))
+
+
+@router.callback_query(F.data == "export_google_sheets")
+async def export_google_sheets_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    context = data.get("report_context")
+    if not context:
+        await callback.answer("⚠️ Нет данных для отчёта.", show_alert=True)
+        return
+    await callback.answer()
+    await send_google_sheet(callback.message, context, data.get("dialogue_history"))
 
 
 # ── Multi-turn dialogue (state = AIForm.dialogue) ──

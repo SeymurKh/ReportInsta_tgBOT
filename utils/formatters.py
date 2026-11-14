@@ -1,5 +1,7 @@
 from datetime import date, datetime
 
+from reports.naming import PRODUCT_TYPE_NAMES, demographic_label
+
 MONTHS_RU = [
     "", "января", "февраля", "марта", "апреля", "мая", "июня",
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
@@ -184,7 +186,9 @@ def format_context_for_ai(context: dict) -> str:
             f"сохранения {stats.get('saves_total', 'н/д')}, репосты {stats.get('shares_total', 'н/д')})"
         )
         lines.append(
-            f"Просмотры профиля: {stats.get('profile_views_total', 'н/д')}. "
+            f"Просмотры профиля: {stats.get('profile_views_total', 'н/д')}; "
+            f"переходы по ссылке: {stats.get('website_clicks_total', 'н/д')}; "
+            f"ответы (аккаунт): {stats.get('replies_total', 'н/д')}. "
             "Метрики аккаунта — итоговые/уникальные значения из Instagram API за период; "
             "метрики публикаций и суммы по дням — другие величины, не сравнивай их напрямую."
         )
@@ -193,6 +197,63 @@ def format_context_for_ai(context: dict) -> str:
                      f"Фото: {content.get('total_images', 0)}, Карусели: {content.get('total_carousels', 0)})")
         lines.append(f"Ср. лайки: {content.get('avg_likes', 0)} | Ср. охват: {content.get('avg_reach', 0)}")
         lines.append(f"ER: {content.get('engagement_rate', 0)}%")
+        product_views = context.get("product_views") or {}
+        if product_views:
+            lines.append(
+                "Просмотры по форматам: " + ", ".join(
+                    f"{PRODUCT_TYPE_NAMES.get(key, key)} {value}"
+                    for key, value in product_views.items()
+                )
+            )
+        profile_activity = context.get("post_profile_activity")
+        if profile_activity:
+            detail = f"визиты в профиль {profile_activity['visits']}"
+            directions = (profile_activity.get("breakdown") or {}).get("direction")
+            if directions:
+                detail += f", маршруты {directions}"
+            lines.append("Действия из публикаций: " + detail)
+        if context.get("best_weekdays"):
+            lines.append(
+                "Лучшие дни для публикаций: "
+                + " ".join(["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"][day]
+                           for day in context["best_weekdays"])
+            )
+        audience = context.get("audience") or {}
+        split = audience.get("audience_split")
+        if split and (split["followers"] + split["non_followers"]):
+            split_total = split["followers"] + split["non_followers"]
+            lines.append(
+                f"Просмотры: подписчики {split['followers'] / split_total * 100:.1f}%, "
+                f"неподписчики {split['non_followers'] / split_total * 100:.1f}%"
+            )
+        follows = audience.get("follow_activity")
+        if follows:
+            lines.append(f"Подписки / отписки: +{follows['follows']} / −{follows['unfollows']}")
+        contacts = audience.get("contact_actions")
+        if contacts and contacts.get("total"):
+            buttons = ", ".join(
+                f"{key} {value}" for key, value in contacts["buttons"].items()
+            )
+            lines.append(
+                f"Кнопки связи: всего {contacts['total']}"
+                + (f" ({buttons})" if buttons else "")
+            )
+        demographics = audience.get("demographics") or {}
+        follower_demo = demographics.get("follower") or {}
+        if follower_demo:
+            demo_parts = []
+            for dimension, label in (
+                ("country", "страны"), ("city", "города"), ("age_gender", "возраст/пол"),
+            ):
+                items = follower_demo.get(dimension) or []
+                if items:
+                    demo_parts.append(
+                        label + " " + ", ".join(
+                            f"{demographic_label(key)} {value}" for key, value in items[:5]
+                        )
+                    )
+            if demo_parts:
+                lines.append("Демография подписчиков: " + "; ".join(demo_parts))
         if content.get("partial_insights_posts") or content.get("legacy_unknown_insights"):
             lines.append(
                 f"Полнота Insights публикаций: неполных {content.get('partial_insights_posts', 0)}, "

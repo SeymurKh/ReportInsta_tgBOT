@@ -1,17 +1,21 @@
 """One-off deploy: upload local analytics/ai_analyzer.py to the server.
 
 Verifies the uploaded checksum, restarts reportinsta and shows the service
-state + last log lines. Password comes from SERVER_SSH_PASSWORD (never stored).
+state + last log lines. Auth uses the SSH key (see audit_snapshot/ssh.py);
+SERVER_SSH_PASSWORD remains as a fallback and is never stored.
 """
 import hashlib
 import os
+import sys
 import time
 
-import paramiko
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-PASSWORD = os.environ["SERVER_SSH_PASSWORD"]
-LOCAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "analytics", "ai_analyzer.py")
+from audit_snapshot.ssh import connect
+
+LOCAL = os.path.join(_PROJECT_ROOT, "analytics", "ai_analyzer.py")
 REMOTE = "/opt/reportinsta/analytics/ai_analyzer.py"
 
 
@@ -22,9 +26,7 @@ def md5(path):
 
 def main():
     local_hash = md5(LOCAL)
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect("49.13.20.118", username="root", password=PASSWORD, timeout=30)
+    client = connect()
     try:
         sftp = client.open_sftp()
         sftp.put(LOCAL, REMOTE)
