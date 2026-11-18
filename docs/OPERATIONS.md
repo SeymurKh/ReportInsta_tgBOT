@@ -110,6 +110,18 @@ GOOGLE_SHEETS_FOLDER_URL=https://drive.google.com/drive/folders/<folder_id>
   заменять в `.env`; `add_account.py` умеет обновить токен уже добавленного
   аккаунта (повторный запуск с тем же `--user-id`).
 - Истечение токена бот сообщает админу в Telegram (`TokenExpiredError`).
+- Массовая замена токенов (несколько страниц сразу, один бэкап и одна
+  валидация; аккаунты вне списка не меняются):
+  ```powershell
+  @' {"room.airport": "IGAA...", "cms.space": "IGAA..."} '@ | python audit_snapshot/replace_account_tokens.py --local --apply --tokens-file -
+  @' {...} '@ | python audit_snapshot/replace_account_tokens.py --remote --apply --tokens-file -
+  ```
+  Ключи — `name` из `INSTAGRAM_ACCOUNTS`; секреты читаются из stdin (`-`), не
+  из файла. Скрипт сверяет каждый токен через `GET /me` с `user_id` записи и
+  при несовпадении ничего не пишет, печатает только маску токена, а после
+  записи проверяет, что «чужие» аккаунты не изменились, и валидирует
+  `.env` через `settings.validate()`. Без `--apply` — dry run; `--remote`
+  требует рестарта сервиса.
 
 ## 7. Деплой изменений
 
